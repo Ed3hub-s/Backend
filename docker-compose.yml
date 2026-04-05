@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ed3hub-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ed3hub-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: ed3hub-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Backend:/app
+      - backend-media:/app/media
+      - backend-static:/app/staticfiles
+    env_file:
+      - ./Backend/.env
+    environment:
+      - DEBUG=True
+      - ALLOWED_HOSTS=*
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+    networks:
+      - ed3hub-network
+    restart: unless-stopped
+
+  celery:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: ed3hub-celery
+    command: celery -A core worker -l info
+    volumes:
+      - ./Backend:/app
+    env_file:
+      - ./Backend/.env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+    networks:
+      - ed3hub-network
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: ed3hub-celery-beat
+    command: celery -A core beat -l info
+    volumes:
+      - ./Backend:/app
+    env_file:
+      - ./Backend/.env
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+    networks:
+      - ed3hub-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+    container_name: ed3hub-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - ed3hub-network
+    restart: unless-stopped
+
+volumes:
+  backend-media:
+  backend-static:
+
+networks:
+  ed3hub-network:
+    driver: bridge
