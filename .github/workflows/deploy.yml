@@ -112,7 +112,7 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}:/workspace \
-            aquasec/trivy:latest \
+            aquasec/trivy:canary \
             convert \
             --format template \
             --template "@/contrib/html.tpl" \
