@@ -10,7 +10,7 @@ db.sqlite3
 # media/
 
 # Static files
-staticfiles/
+# staticfiles/
 
 # Python
 __pycache__/
