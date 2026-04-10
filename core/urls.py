@@ -26,3 +26,11 @@ urlpatterns = [
     path('api/docs/', schema_view.with_ui('swagger', cache_timeout=0), name='swagger-ui'),
     path('api/redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='redoc'),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+# Always serve media files regardless of DEBUG
+if not settings.DEBUG:
+    from django.views.static import serve
+    from django.urls import re_path
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    ]
