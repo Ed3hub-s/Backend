@@ -12,17 +12,17 @@ services:
 
   backend:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-backend
     ports:
       - "8000:8000"
     volumes:
-      - ./Backend:/app
+      - .:/app
       - backend-media:/app/media
       - backend-static:/app/staticfiles
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - DEBUG=True
       - ALLOWED_HOSTS=*
@@ -36,14 +36,14 @@ services:
 
   celery:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-celery
     command: celery -A core worker -l info
     volumes:
-      - ./Backend:/app
+      - .:/app
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -56,14 +56,14 @@ services:
 
   celery-beat:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-celery-beat
     command: celery -A core beat -l info
     volumes:
-      - ./Backend:/app
+      - .:/app
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -76,7 +76,7 @@ services:
 
   frontend:
     build:
-      context: ./Frontend
+      context: ../Frontend
       dockerfile: Dockerfile
     container_name: ed3hub-frontend
     ports:
