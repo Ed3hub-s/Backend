@@ -20,7 +20,6 @@ services:
     volumes:
       - .:/app
       - backend-media:/app/media
-      - backend-static:/app/staticfiles
     env_file:
       - ./.env
     environment:
@@ -92,7 +91,6 @@ services:
 
 volumes:
   backend-media:
-  backend-static:
 
 networks:
   ed3hub-network:
