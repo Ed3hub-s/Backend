@@ -293,15 +293,15 @@ ACCOUNT_EMAIL_VERIFICATION = 'none'
 # Email
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'das121.truehost.cloud')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False') == 'True'
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', os.getenv('EMAIL_HOST_USER', ''))
-SERVER_EMAIL = os.getenv('SERVER_EMAIL', os.getenv('EMAIL_HOST_USER', ''))
-EMAIL_TIMEOUT = 60
+DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
+SERVER_EMAIL = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
+EMAIL_TIMEOUT = 30
 EMAIL_SSL_CERTFILE = None
 EMAIL_SSL_KEYFILE = None
 

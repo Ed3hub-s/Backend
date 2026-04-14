@@ -77,12 +77,16 @@ services:
     build:
       context: ../Frontend
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=https://dev-api.ed3hub.com
+        - NEXT_PUBLIC_WS_URL=wss://dev-api.ed3hub.com
+        - NEXT_PUBLIC_GOOGLE_CLIENT_ID=793067091414-e1k27kr5ub9btdtgmfpd5hfv9svjlht8.apps.googleusercontent.com
     container_name: ed3hub-frontend
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+      - NEXT_PUBLIC_API_URL=https://dev-api.ed3hub.com
+      - NEXT_PUBLIC_WS_URL=wss://dev-api.ed3hub.com
     depends_on:
       - backend
     networks:
