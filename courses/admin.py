@@ -21,6 +21,7 @@ class QuestionInline(StackedInline):
 class LessonInline(TabularInline):
     model = Lesson
     extra = 1
+    fields = ('title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'content', 'is_free_preview')
 
 
 class ModuleInline(TabularInline):
@@ -109,8 +110,10 @@ class CategoryAdmin(ModelAdmin):
 
 @admin.register(Lesson)
 class LessonAdmin(ModelAdmin):
-    list_display = ('title', 'module', 'lesson_type', 'order')
+    list_display = ('title', 'module', 'lesson_type', 'order', 'duration_minutes')
     list_filter = ('lesson_type',)
+    search_fields = ('title', 'module__title')
+    fields = ('module', 'title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'content', 'transcript', 'is_free_preview')
 
 
 @admin.register(Assessment)
@@ -141,9 +144,11 @@ class ModuleProgressAdmin(ModelAdmin):
 
 @admin.register(Certificate)
 class CertificateAdmin(ModelAdmin):
-    list_display = ('get_learner', 'get_course', 'cert_type', 'issued_at')
+    list_display = ('certificate_id', 'get_learner', 'get_course', 'cert_type', 'issued_at')
     list_filter = ('cert_type', 'issued_at')
-    search_fields = ('enrollment__learner__username', 'enrollment__course__title')
+    search_fields = ('certificate_id', 'enrollment__learner__username', 'enrollment__course__title')
+    readonly_fields = ('issued_at', 'get_pdf_link', 'get_qr_link')
+    fields = ('certificate_id', 'enrollment', 'cert_type', 'issued_at', 'pdf_file', 'get_pdf_link', 'qr_code', 'get_qr_link', 'nft_tx_hash')
     
     def get_learner(self, obj):
         return obj.enrollment.learner.username
@@ -152,6 +157,20 @@ class CertificateAdmin(ModelAdmin):
     def get_course(self, obj):
         return obj.enrollment.course.title
     get_course.short_description = 'Course'
+    
+    def get_pdf_link(self, obj):
+        if obj.pdf_file:
+            return f'<a href="{obj.pdf_file.url}" target="_blank">Download PDF</a>'
+        return '-'
+    get_pdf_link.short_description = 'PDF Download'
+    get_pdf_link.allow_tags = True
+    
+    def get_qr_link(self, obj):
+        if obj.qr_code:
+            return f'<a href="{obj.qr_code.url}" target="_blank">View QR Code</a>'
+        return '-'
+    get_qr_link.short_description = 'QR Code'
+    get_qr_link.allow_tags = True
 
 
 class SessionRegistrationInline(TabularInline):

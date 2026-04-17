@@ -145,13 +145,16 @@ if USE_R2:
     AWS_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('R2_BUCKET_NAME')
-    AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')  # https://<account_id>.r2.cloudflarestorage.com
-    AWS_S3_REGION_NAME = 'auto'
-    AWS_S3_SIGNATURE_VERSION = 's3v4'
-    AWS_DEFAULT_ACL = None
+    AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')
     AWS_S3_FILE_OVERWRITE = False
-    AWS_QUERYSTRING_AUTH = False  # serve public URLs via custom domain
-    MEDIA_URL = os.getenv('R2_MEDIA_URL', 'https://media-dev.ed3hub.com/')
+    AWS_DEFAULT_ACL = None          # R2 does not support S3 ACLs
+    AWS_S3_OBJECT_PARAMETERS = {
+        'CacheControl': 'max-age=86400',
+    }
+    AWS_QUERYSTRING_AUTH = False    # Use public URLs, not signed URLs
+    # R2_MEDIA_URL is the public base URL for the bucket (custom domain or r2.dev URL)
+    _r2_media_url = os.getenv('R2_MEDIA_URL', '').rstrip('/')
+    MEDIA_URL = f'{_r2_media_url}/'
     MEDIA_ROOT = ''
 else:
     MEDIA_URL = '/media/'
@@ -212,6 +215,7 @@ UNFOLD = {
                     {'title': 'Modules', 'icon': 'view_module', 'link': '/admin/courses/module/'},
                     {'title': 'Lessons', 'icon': 'play_lesson', 'link': '/admin/courses/lesson/'},
                     {'title': 'Enrollments', 'icon': 'how_to_reg', 'link': '/admin/courses/enrollment/'},
+                    {'title': 'Certificates', 'icon': 'workspace_premium', 'link': '/admin/courses/certificate/'},
                     {'title': 'Reviews', 'icon': 'star', 'link': '/admin/courses/review/'},
                 ],
             },
@@ -238,6 +242,9 @@ UNFOLD = {
 # CORS
 CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')]
 CORS_ALLOW_CREDENTIALS = True
+
+# Frontend URL for certificate verification
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # REST Framework
 REST_FRAMEWORK = {

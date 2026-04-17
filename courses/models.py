@@ -1,3 +1,4 @@
+import uuid
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
@@ -95,7 +96,7 @@ class Lesson(models.Model):
     lesson_type = models.CharField(max_length=20, choices=LESSON_TYPE, default='video')
     order = models.PositiveIntegerField(default=0)
     duration_minutes = models.PositiveIntegerField(default=0)
-    video_url = models.URLField(blank=True, default='')
+    video_file = models.FileField(upload_to='courses/videos/', blank=True, null=True)
     content = models.TextField(blank=True, default='')
     transcript = models.TextField(blank=True, default='')
     is_free_preview = models.BooleanField(default=False)
@@ -268,15 +269,30 @@ class Certificate(models.Model):
     )
 
     enrollment = models.OneToOneField(Enrollment, on_delete=models.CASCADE, related_name='certificate')
+    certificate_id = models.CharField(max_length=20, unique=True, blank=True)
     cert_type = models.CharField(max_length=10, choices=CERT_TYPE)
     issued_at = models.DateTimeField(auto_now_add=True)
     # Standard cert — PDF generated/uploaded here
     pdf_file = models.FileField(upload_to='certificates/', blank=True, null=True)
+    # QR code for verification
+    qr_code = models.ImageField(upload_to='certificates/qr/', blank=True, null=True)
     # NFT cert — blockchain tx hash stored here once integration is live
     nft_tx_hash = models.CharField(max_length=255, blank=True, default='')
 
+    def save(self, *args, **kwargs):
+        if not self.certificate_id:
+            # Generate alphanumeric certificate ID: ED3-XXXX-XXXX
+            while True:
+                unique_id = uuid.uuid4().hex[:8].upper()
+                certificate_id = f'ED3-{unique_id[:4]}-{unique_id[4:8]}'
+                # Ensure uniqueness
+                if not Certificate.objects.filter(certificate_id=certificate_id).exists():
+                    self.certificate_id = certificate_id
+                    break
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f'{self.enrollment.learner.username} — {self.enrollment.course.title} ({self.cert_type})'
+        return f'{self.certificate_id} — {self.enrollment.learner.username} — {self.enrollment.course.title}'
 
 
 class Session(models.Model):

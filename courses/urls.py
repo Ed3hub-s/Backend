@@ -7,7 +7,7 @@ from .views import (
     CompleteLessonView, CompleteModuleView,
     CourseReviewView,
     MyWalletView, ClaimTokenView, MyStatsView,
-    IssueCertificateView, MyCertificatesView, CertificateDetailView,
+    IssueCertificateView, MyCertificatesView, CertificateDetailView, RegenerateCertificateView,
     ModuleCreateView, ModuleUpdateView,
     LessonCreateView, LessonUpdateView,
     QuizCreateView, QuizUpdateView,
@@ -35,7 +35,6 @@ urlpatterns = [
 
     # Lessons
     path('modules/<int:module_id>/lessons/create/', LessonCreateView.as_view(), name='lesson-create'),
-    path('lessons/<int:pk>/', LessonDetailView.as_view(), name='lesson-detail'),
     path('lessons/<int:lesson_id>/', LessonUpdateView.as_view(), name='lesson-update'),
     path('lessons/<int:lesson_id>/complete/', CompleteLessonView.as_view(), name='complete-lesson'),
 
@@ -61,7 +60,8 @@ urlpatterns = [
     # Certificates
     path('my/certificates/', MyCertificatesView.as_view(), name='my-certificates'),
     path('my/certificate/<int:enrollment_id>/', IssueCertificateView.as_view(), name='issue-certificate'),
-    path('certificates/<int:certificate_id>/', CertificateDetailView.as_view(), name='certificate-detail'),
+    path('certificates/<str:certificate_id>/regenerate/', RegenerateCertificateView.as_view(), name='certificate-regenerate'),
+    path('certificates/<str:certificate_id>/', CertificateDetailView.as_view(), name='certificate-detail'),
 
     # Sessions
     path('sessions/', SessionListCreateView.as_view(), name='session-list-create'),

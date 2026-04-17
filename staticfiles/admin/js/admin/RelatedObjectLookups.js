@@ -74,15 +74,9 @@
 
   function updateRelatedObjectLinks(triggeringLink) {
     const $this = $(triggeringLink);
-    // !CHANGED from original
-    // const siblings = $this.nextAll(
-    //   ".view-related, .change-related, .delete-related"
-    // );
-
-    const siblings = $this
-      .closest(".related-widget-wrapper")
-      .find(".view-related, .change-related, .delete-related");
-
+    const siblings = $this.nextAll(
+      ".view-related, .change-related, .delete-related"
+    );
     if (!siblings.length) {
       return;
     }
