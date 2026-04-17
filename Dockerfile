@@ -21,7 +21,8 @@ RUN mkdir -p media staticfiles
 # Expose port
 EXPOSE 8000
 
-# Run migrations and start server with Daphne (ASGI server)
+# Run migrations, create superuser, collect static, then start server
 CMD python manage.py migrate && \
+    python manage.py create_superuser_env && \
     python manage.py collectstatic --noinput && \
     daphne -b 0.0.0.0 -p 8000 core.asgi:application
