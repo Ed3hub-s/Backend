@@ -125,6 +125,9 @@ class CourseListSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'thumbnail', 'skill_level', 'price', 'is_free',
             'instructor_name', 'average_rating', 'total_reviews', 'total_enrolled',
             'category_name', 'estimated_hours', 'is_published',
+            # Fields needed for the edit form
+            'description', 'what_you_learn', 'ideal_for', 'tools_used',
+            'what_included', 'hours_per_week', 'duration_weeks', 'is_self_paced',
         )
 
     def get_instructor_name(self, obj):
