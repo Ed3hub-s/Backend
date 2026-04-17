@@ -135,6 +135,7 @@ USE_TZ = True
 # Static files — served by WhiteNoise
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'static']
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 # Media / File Storage — Cloudflare R2 in production, local in development
@@ -165,8 +166,8 @@ UNFOLD = {
     'SITE_HEADER': 'Ed3Hub',
     'SITE_SUBHEADER': 'Platform Management',
     'SITE_URL': '/',
-    'SITE_LOGO': lambda request: '/media/avatars/ed3hub_logo.png',
-    'SITE_FAVICON': lambda request: '/media/avatars/ed3hub_logo.png',
+    'SITE_LOGO': lambda request: '/static/img/ed3hub_logo.png',
+    'SITE_FAVICON': lambda request: '/static/img/ed3hub_logo.png',
     'SITE_SYMBOL': 'school',
     'SHOW_HISTORY': True,
     'SHOW_VIEW_ON_SITE': True,
