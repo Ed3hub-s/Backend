@@ -243,6 +243,9 @@ UNFOLD = {
 CORS_ALLOWED_ORIGINS = [o.strip() for o in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')]
 CORS_ALLOW_CREDENTIALS = True
 
+# CSRF
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:3000').split(',')]
+
 # Frontend URL for certificate verification
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
