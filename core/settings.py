@@ -305,7 +305,7 @@ EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False') == 'True'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD','EIFousk4J0jqN9R4')
 DEFAULT_FROM_EMAIL = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
 SERVER_EMAIL = os.getenv('EMAIL_HOST_USER', 'ed3hub@ed3hub.name.ng')
 EMAIL_TIMEOUT = 30

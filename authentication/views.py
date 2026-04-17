@@ -64,7 +64,11 @@ class RegisterView(APIView):
 
         user = User.objects.create_user(username=username, email=email, password=password, is_active=False)
         UserProfile.objects.create(user=user, role=role)
-        create_and_send_otp(email)
+        try:
+            create_and_send_otp(email)
+        except Exception:
+            user.delete()
+            return Response({'detail': 'Failed to send verification email. Please try again.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({'detail': 'OTP sent to your email.', 'email': email}, status=status.HTTP_201_CREATED)
 
@@ -109,7 +113,10 @@ class ResendOTPView(APIView):
             return Response({'detail': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
         if not User.objects.filter(email=email, is_active=False).exists():
             return Response({'detail': 'No pending registration found for this email.'}, status=status.HTTP_400_BAD_REQUEST)
-        create_and_send_otp(email)
+        try:
+            create_and_send_otp(email)
+        except Exception:
+            return Response({'detail': 'Failed to send OTP email. Please try again.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({'detail': 'OTP resent to your email.'}, status=status.HTTP_200_OK)
 
 
@@ -271,7 +278,10 @@ class ForgotPasswordView(APIView):
             # Return success anyway to avoid email enumeration
             return Response({'detail': 'If that email exists, an OTP has been sent.'}, status=status.HTTP_200_OK)
 
-        create_and_send_reset_otp(email)
+        try:
+            create_and_send_reset_otp(email)
+        except Exception:
+            return Response({'detail': 'Failed to send OTP email. Please try again later.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({'detail': 'If that email exists, an OTP has been sent.'}, status=status.HTTP_200_OK)
 
 
