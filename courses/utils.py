@@ -131,27 +131,28 @@ def generate_certificate_pdf(certificate):
     c.roundRect(mi, mi, W - 2*mi, H - 2*mi, 3, stroke=1, fill=0)
 
     # ── 3. Logo ──────────────────────────────────────────────────────────────
-    logo_top = H - 68
+    # Start from top of content area with proper spacing
+    logo_top = H - 80
     box_sz   = 36
-    gap      = 8
-    c.setFont('Helvetica-Bold', 24)
-    hub_w = c.stringWidth('ed3hub', 'Helvetica-Bold', 24)
+    gap      = 12
+    c.setFont('Helvetica-Bold', 26)
+    hub_w = c.stringWidth('ed3hub', 'Helvetica-Bold', 26)
     group_w = box_sz + gap + hub_w
     gx = (W - group_w) / 2
 
     c.setFillColor(BLUE_ACCENT)
-    c.roundRect(gx, logo_top, box_sz, box_sz, 4, fill=1, stroke=0)
+    c.roundRect(gx, logo_top, box_sz, box_sz, 5, fill=1, stroke=0)
     c.setFillColor(WHITE)
     c.setFont('Helvetica-Bold', 20)
     c.drawCentredString(gx + box_sz / 2, logo_top + 9, 'e')
 
     c.setFillColor(GREY_800)
-    c.setFont('Helvetica-Bold', 24)
-    c.drawString(gx + box_sz + gap, logo_top + 8, 'ed3hub')
+    c.setFont('Helvetica-Bold', 26)
+    c.drawString(gx + box_sz + gap, logo_top + 6, 'ed3hub')
 
     # ── 4. "CERTIFICATE OF COMPLETION" with dividers ─────────────────────────
-    coc_y   = logo_top - box_sz - 20
-    rule_hw = 155
+    coc_y     = logo_top - 52
+    rule_hw = 160
 
     c.setStrokeColor(GREY_400)
     c.setLineWidth(1.5)
@@ -161,10 +162,10 @@ def generate_certificate_pdf(certificate):
     c.setFillColor(GREY_800)
     c.drawCentredString(W / 2, coc_y, 'CERTIFICATE OF COMPLETION')
 
-    c.line(W/2 - rule_hw, coc_y - 7, W/2 + rule_hw, coc_y - 7)
+    c.line(W/2 - rule_hw, coc_y - 8, W/2 + rule_hw, coc_y - 8)
 
     # ── 5. "This is to certify that" ─────────────────────────────────────────
-    certify_y = coc_y - 26
+    certify_y = coc_y - 40
     c.setFont('Helvetica', 12)
     c.setFillColor(GREY_700)
     c.drawCentredString(W / 2, certify_y, 'This is to certify that')
@@ -174,40 +175,42 @@ def generate_certificate_pdf(certificate):
     learner_name = (f"{learner.first_name} {learner.last_name}".strip()
                     or learner.username).upper()
 
-    name_y = certify_y - 38
-    c.setFont('Helvetica-Bold', 38)
+    name_y = certify_y - 52
+    c.setFont('Helvetica-Bold', 48)
     c.setFillColor(BLUE_DARK)
     c.drawCentredString(W / 2, name_y, learner_name)
 
     # ── 7. "has successfully completed the course" ───────────────────────────
-    completed_y = name_y - 28
-    c.setFont('Helvetica', 12)
+    completed_y = name_y - 40
+    c.setFont('Helvetica', 11)
     c.setFillColor(GREY_700)
     c.drawCentredString(W / 2, completed_y, 'has successfully completed the course')
 
     c.setStrokeColor(GREY_400)
     c.setLineWidth(1.5)
-    c.line(W/2 - 120, completed_y - 7, W/2 + 120, completed_y - 7)
+    c.line(W/2 - 120, completed_y - 8, W/2 + 120, completed_y - 8)
 
     # ── 8. Course title ──────────────────────────────────────────────────────
     course_title = certificate.enrollment.course.title.upper()
-    course_y = completed_y - 26
+    course_y = completed_y - 38
     c.setFont('Helvetica-Bold', 18)
     c.setFillColor(BLUE_ACCENT)
     c.drawCentredString(W / 2, course_y, course_title)
 
     # ── 9. Description ───────────────────────────────────────────────────────
-    desc_y = course_y - 18
-    c.setFont('Helvetica', 9.5)
+    desc_y = course_y - 28
+    c.setFont('Helvetica', 10)
     c.setFillColor(GREY_700)
     c.drawCentredString(W / 2, desc_y,
-        'on ed3hub, demonstrating proficiency and understanding of the subject matter.')
+        'on ed3hub, demonstrating proficiency and understanding of the'
+    )
+    c.drawCentredString(W / 2, desc_y - 12, 'subject matter.')
 
     # ── 10. Footer divider ───────────────────────────────────────────────────
-    footer_line_y = desc_y - 24
+    footer_line_y = desc_y - 38
     c.setStrokeColor(GREY_400)
     c.setLineWidth(1.5)
-    c.line(mi + 18, footer_line_y, W - mi - 18, footer_line_y)
+    c.line(mi + 20, footer_line_y, W - mi - 20, footer_line_y)
 
     # ── 11. Footer: 4 columns  Date | Cert ID | Instructor | QR ─────────────
     instructor      = certificate.enrollment.course.instructor
@@ -220,9 +223,9 @@ def generate_certificate_pdf(certificate):
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://ed3hub.com')
     verify_url   = f'{frontend_url}/certificate/verify/{cert_id}'
 
-    pad      = mi + 24
+    pad      = mi + 28
     qr_sz    = 72
-    qr_cx    = W - pad - qr_sz / 2 - 8
+    qr_cx    = W - pad - qr_sz / 2 - 12
     col_span = (qr_cx - qr_sz / 2 - pad) / 3
     c1 = pad + col_span * 0.5
     c2 = pad + col_span * 1.5
@@ -230,29 +233,29 @@ def generate_certificate_pdf(certificate):
 
     lbl_y  = footer_line_y - 14
     val_y  = footer_line_y - 28
-    sig_y  = footer_line_y - 50
-    line_y = footer_line_y - 62
-    role_y = footer_line_y - 72
+    sig_y  = footer_line_y - 48
+    line_y = footer_line_y - 60
+    role_y = footer_line_y - 70
 
     def col_label(x, txt):
-        c.setFont('Helvetica', 8.5)
+        c.setFont('Helvetica', 9)
         c.setFillColor(GREY_700)
         c.drawCentredString(x, lbl_y, txt)
 
     def col_value(x, txt, max_width=160):
-        c.setFont('Helvetica-Bold', 10)
+        c.setFont('Helvetica-Bold', 11)
         c.setFillColor(GREY_900)
-        while c.stringWidth(txt, 'Helvetica-Bold', 10) > max_width and len(txt) > 6:
+        while c.stringWidth(txt, 'Helvetica-Bold', 11) > max_width and len(txt) > 6:
             txt = txt[:-4] + '...'
         c.drawCentredString(x, val_y, txt)
 
-    def col_rule(x, half=28):
+    def col_rule(x, half=32):
         c.setStrokeColor(GREY_400)
-        c.setLineWidth(0.8)
+        c.setLineWidth(0.9)
         c.line(x - half, line_y, x + half, line_y)
 
     def col_role(x, txt):
-        c.setFont('Helvetica', 7)
+        c.setFont('Helvetica', 7.5)
         c.setFillColor(GREY_500)
         c.drawCentredString(x, role_y, txt)
 
