@@ -256,11 +256,6 @@ class CourseCreateView(APIView):
         data = request.data.copy()
         logger.info(f"Received data keys: {data.keys()}")
         
-        base_slug = slugify(data.get('title', ''))[:50] or 'course'
-        slug = base_slug
-        if Course.objects.filter(slug=slug).exists():
-            slug = f'{base_slug}-{uuid.uuid4().hex[:6]}'
-        data['slug'] = slug
         data['completion_tokens'] = 10
         
         # Extract modules data
@@ -315,7 +310,6 @@ class CourseUpdateView(APIView):
     parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def patch(self, request, course_id):
-        from django.utils.text import slugify
         import uuid
 
         try:
@@ -324,15 +318,6 @@ class CourseUpdateView(APIView):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
         data = request.data.copy()
         data.pop('completion_tokens', None)
-
-        # Regenerate slug if title changed
-        new_title = data.get('title', '').strip()
-        if new_title and new_title != course.title:
-            base_slug = slugify(new_title)[:50] or 'course'
-            slug = base_slug
-            if Course.objects.filter(slug=slug).exclude(id=course_id).exists():
-                slug = f'{base_slug}-{uuid.uuid4().hex[:6]}'
-            data['slug'] = slug
         
         # Extract modules data
         modules_json = data.pop('modules', None)
@@ -464,6 +449,32 @@ class CourseListView(generics.ListAPIView):
         if category:
             qs = qs.filter(category__slug=category)
         return qs
+
+    def get_serializer_context(self):
+        return {'request': self.request}
+
+
+class EnrolledCourseDetailView(generics.RetrieveAPIView):
+    """Course detail for enrolled learners — no is_published filter."""
+    serializer_class = CourseDetailSerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_object(self):
+        course_id = self.kwargs['course_id']
+        # Verify the user is actually enrolled
+        enrollment = Enrollment.objects.filter(
+            learner=self.request.user, course_id=course_id
+        ).first()
+        if not enrollment:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('You are not enrolled in this course.')
+        return Course.objects.prefetch_related(
+            'modules__lessons__quiz__questions__choices',
+            'modules__assessments',
+            'resources',
+            'assessments',
+            'reviews__learner',
+        ).select_related('instructor', 'category').get(id=course_id)
 
     def get_serializer_context(self):
         return {'request': self.request}

@@ -107,7 +107,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'tools_used', 'ideal_for', 'what_included', 'what_you_learn',
             'completion_tokens',
         )
-        read_only_fields = ('id', 'slug', 'completion_tokens')
+        read_only_fields = ('id', 'completion_tokens')
 
 
 class CourseListSerializer(serializers.ModelSerializer):

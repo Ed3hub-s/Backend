@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    CategoryListView, CourseListView, CourseDetailView,
+    CategoryListView, CourseListView, CourseDetailView, EnrolledCourseDetailView,
     EducatorCourseListView, CourseCreateView, CourseUpdateView,
     LessonDetailView,
     EnrollView, MyEnrollmentsView,
@@ -49,6 +49,7 @@ urlpatterns = [
     # Enrollment
     path('my/enrollments/', MyEnrollmentsView.as_view(), name='my-enrollments'),
     path('my/stats/', MyStatsView.as_view(), name='my-stats'),
+    path('enrolled/<int:course_id>/', EnrolledCourseDetailView.as_view(), name='enrolled-course-detail'),
 
     # Reviews
     path('<int:course_id>/review/', CourseReviewView.as_view(), name='course-review'),

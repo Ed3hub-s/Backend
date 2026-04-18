@@ -50,6 +50,18 @@ class Course(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        if not self.slug and self.title:
+            from django.utils.text import slugify
+            import uuid
+            base = slugify(self.title)[:50] or 'course'
+            slug = base
+            qs = Course.objects.exclude(pk=self.pk) if self.pk else Course.objects
+            if qs.filter(slug=slug).exists():
+                slug = f'{base}-{uuid.uuid4().hex[:6]}'
+            self.slug = slug
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.title
 
