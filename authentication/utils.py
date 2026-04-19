@@ -2,11 +2,10 @@ import logging
 import random
 from datetime import timedelta
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
 
 from .models import OTPCode
+from .email_utils import send_smart_email
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +33,13 @@ OTP_HTML_TEMPLATE = """
 
 def _send_otp_email(to_mail: str, mail_subject: str, html_message: str):
     try:
-        sent = send_mail(
+        send_smart_email(
             subject=mail_subject,
-            message='',
-            from_email=settings.DEFAULT_FROM_EMAIL,
+            body='',
             recipient_list=[to_mail],
             html_message=html_message,
-            fail_silently=False,
         )
-        if sent:
-            logger.info(f'OTP email sent to {to_mail}')
-        else:
-            logger.warning(f'OTP email not sent to {to_mail}')
+        logger.info(f'OTP email sent to {to_mail}')
     except Exception as e:
         logger.error(f'Failed to send OTP email to {to_mail}: {e}')
         raise
