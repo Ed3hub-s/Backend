@@ -136,26 +136,32 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
+#STATICFILES_STORAGE = 'whitenoise.storage.CompressedStaticFilesStorage'
 
 # Media / File Storage — Cloudflare R2 in production, local in development
 USE_R2 = os.getenv('USE_R2', 'False') == 'True'
 
 if USE_R2:
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage',
+        },
+    }
     AWS_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('R2_BUCKET_NAME')
+    AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')
     AWS_S3_CUSTOM_DOMAIN = os.getenv('R2_CUSTOM_DOMAIN')
     AWS_LOCATION = os.getenv('AWS_LOCATION', 'dev')
-    AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')
     AWS_S3_FILE_OVERWRITE = False
-    AWS_DEFAULT_ACL = None          # R2 does not support S3 ACLs
+    AWS_DEFAULT_ACL = None
     AWS_S3_OBJECT_PARAMETERS = {
         'CacheControl': 'max-age=86400',
     }
-    AWS_QUERYSTRING_AUTH = False    # Use public URLs, not signed URLs
-    # R2_MEDIA_URL is the public base URL for the bucket (custom domain or r2.dev URL)
+    AWS_QUERYSTRING_AUTH = False
     _r2_media_url = os.getenv('R2_MEDIA_URL', '').rstrip('/')
     MEDIA_URL = f'{_r2_media_url}/'
     MEDIA_ROOT = ''
