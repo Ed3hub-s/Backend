@@ -147,6 +147,7 @@ if USE_R2:
     AWS_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('R2_BUCKET_NAME')
     AWS_S3_CUSTOM_DOMAIN = os.getenv('R2_CUSTOM_DOMAIN')
+    AWS_LOCATION = os.getenv('AWS_LOCATION', 'dev')
     AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None          # R2 does not support S3 ACLs
