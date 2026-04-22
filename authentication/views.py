@@ -235,11 +235,8 @@ class GoogleAuthView(APIView):
             user = User.objects.get(email=email)
             if not user.is_active:
                 return Response({'detail': 'This account is not yet verified. Please verify your email first.'}, status=status.HTTP_403_FORBIDDEN)
-            # If role is explicitly passed and user has no profile yet, apply it
-            profile, created = UserProfile.objects.get_or_create(user=user, defaults={'role': role})
-            if created or (request.data.get('role') and profile.role != role):
-                profile.role = role
-                profile.save()
+            # Never change role for existing users
+            UserProfile.objects.get_or_create(user=user, defaults={'role': role})
         except User.DoesNotExist:
             base_username = email.split('@')[0]
             username = base_username
