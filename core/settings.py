@@ -149,6 +149,7 @@ if USE_R2:
     AWS_S3_ENDPOINT_URL = os.getenv('R2_ENDPOINT_URL')
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None          # R2 does not support S3 ACLs
+    AWS_LOCATION = os.getenv('R2_LOCATION', 'media')
     AWS_S3_OBJECT_PARAMETERS = {
         'CacheControl': 'max-age=86400',
     }
@@ -299,6 +300,7 @@ SOCIALACCOUNT_PROVIDERS = {
 ACCOUNT_EMAIL_VERIFICATION = 'none'
 
 # Email
+SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'das121.truehost.cloud')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
