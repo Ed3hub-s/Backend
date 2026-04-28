@@ -1166,10 +1166,14 @@ class EducatorWalletView(APIView):
             return Response({'detail': 'Only educators have a wallet.'}, status=status.HTTP_403_FORBIDDEN)
         wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
         transactions = wallet.transactions.all()[:20]
+        total_courses = Course.objects.filter(instructor=request.user).count()
+        total_students = Enrollment.objects.filter(course__instructor=request.user).values('learner').distinct().count()
         return Response({
             'balance': str(wallet.balance),
             'total_earned': str(wallet.total_earned),
             'total_withdrawn': str(wallet.total_withdrawn),
+            'total_courses': total_courses,
+            'total_students': total_students,
             'transactions': [
                 {
                     'id': t.id,
