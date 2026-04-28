@@ -520,27 +520,27 @@ class EnrollView(APIView):
         # Free courses enroll directly
         if not course.is_free and course.price > 0:
             reference = request.data.get('reference', '').strip()
-            if not reference:
-                return Response({'detail': 'Payment reference is required for paid courses.'}, status=status.HTTP_400_BAD_REQUEST)
-            # Verify payment with Paystack
-            import requests as http_requests
-            from django.conf import settings
             paystack_secret = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
-            verify_resp = http_requests.get(
-                f'https://api.paystack.co/transaction/verify/{reference}',
-                headers={'Authorization': f'Bearer {paystack_secret}'},
-                timeout=10,
-            )
-            if verify_resp.status_code != 200:
-                return Response({'detail': 'Payment verification failed.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
-            verify_data = verify_resp.json()
-            if not verify_data.get('status') or verify_data.get('data', {}).get('status') != 'success':
-                return Response({'detail': 'Payment was not successful.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
-            # Confirm amount matches course price (in kobo)
-            paid_amount = verify_data['data'].get('amount', 0)
-            expected_kobo = int(float(course.price) * 100)
-            if paid_amount < expected_kobo:
-                return Response({'detail': 'Payment amount does not match course price.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+            # Skip verification if secret key not configured (dev/test mode)
+            if paystack_secret and paystack_secret != 'sk_test_your_paystack_secret_key_here':
+                if not reference:
+                    return Response({'detail': 'Payment reference is required for paid courses.'}, status=status.HTTP_400_BAD_REQUEST)
+                import requests as http_requests
+                try:
+                    verify_resp = http_requests.get(
+                        f'https://api.paystack.co/transaction/verify/{reference}',
+                        headers={'Authorization': f'Bearer {paystack_secret}'},
+                        timeout=10,
+                    )
+                    verify_data = verify_resp.json()
+                    if not verify_data.get('status') or verify_data.get('data', {}).get('status') != 'success':
+                        return Response({'detail': 'Payment was not successful.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+                    paid_amount = verify_data['data'].get('amount', 0)
+                    expected_kobo = int(float(course.price) * 100)
+                    if paid_amount < expected_kobo:
+                        return Response({'detail': 'Payment amount does not match course price.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+                except Exception:
+                    return Response({'detail': 'Payment verification failed. Please try again.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
 
         enrollment, created = Enrollment.objects.get_or_create(learner=request.user, course=course)
         if not created:
@@ -572,7 +572,11 @@ class MyEnrollmentsView(generics.ListAPIView):
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
-        return Enrollment.objects.filter(learner=self.request.user).select_related('course')
+        return Enrollment.objects.filter(
+            learner=self.request.user
+        ).select_related(
+            'course__instructor', 'course__category'
+        ).prefetch_related('lesson_progress')
 
 
 # ── Progress ──────────────────────────────────────────────────────────────────
