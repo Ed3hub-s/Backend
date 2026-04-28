@@ -269,6 +269,9 @@ CORS_EXPOSE_HEADERS = ['content-disposition']
 # CSRF
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:3000').split(',')]
 
+# Paystack
+PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
+
 # Frontend URL for certificate verification
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 

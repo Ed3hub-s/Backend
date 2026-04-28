@@ -361,3 +361,63 @@ class SessionRegistration(models.Model):
 
     def __str__(self):
         return f'{self.learner.username} → {self.session.title}'
+
+
+# ── Educator Wallet ───────────────────────────────────────────────────────────
+
+EDUCATOR_SHARE = 0.60   # 60% to educator
+PLATFORM_SHARE = 0.40  # 40% to Ed3Hub
+
+
+class EducatorWallet(models.Model):
+    educator = models.OneToOneField(User, on_delete=models.CASCADE, related_name='educator_wallet')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_earned = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_withdrawn = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.educator.username} — ₦{self.balance}'
+
+
+class EducatorTransaction(models.Model):
+    TYPE_CHOICES = (
+        ('credit', 'Credit'),
+        ('debit', 'Debit'),
+    )
+    wallet = models.ForeignKey(EducatorWallet, on_delete=models.CASCADE, related_name='transactions')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    transaction_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    description = models.CharField(max_length=255)
+    course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.wallet.educator.username} {self.transaction_type} ₦{self.amount}'
+
+
+class WithdrawalRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('rejected', 'Rejected'),
+    )
+    wallet = models.ForeignKey(EducatorWallet, on_delete=models.CASCADE, related_name='withdrawals')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    bank_name = models.CharField(max_length=100)
+    account_number = models.CharField(max_length=20)
+    account_name = models.CharField(max_length=255)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    admin_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.wallet.educator.username} — ₦{self.amount} ({self.status})'

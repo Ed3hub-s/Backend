@@ -15,6 +15,7 @@ from .views import (
     CourseContentView,
     SessionListCreateView, SessionDetailView, PublicSessionListView,
     SessionRegisterView, SessionUnregisterView,
+    EducatorWalletView, WithdrawalRequestView,
 )
 
 urlpatterns = [
@@ -70,6 +71,10 @@ urlpatterns = [
     path('sessions/<int:session_id>/', SessionDetailView.as_view(), name='session-detail'),
     path('sessions/<int:session_id>/register/', SessionRegisterView.as_view(), name='session-register'),
     path('sessions/<int:session_id>/unregister/', SessionUnregisterView.as_view(), name='session-unregister'),
+
+    # Educator Wallet
+    path('educator/wallet/', EducatorWalletView.as_view(), name='educator-wallet'),
+    path('educator/withdraw/', WithdrawalRequestView.as_view(), name='educator-withdraw'),
 
     # Course detail + enroll (keep last to avoid slug conflicts)
     path('<int:course_id>/enroll/', EnrollView.as_view(), name='enroll'),

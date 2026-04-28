@@ -10,6 +10,7 @@ from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
     Certificate, Quiz, Question, Choice, Session, SessionRegistration,
+    EducatorWallet, EducatorTransaction, WithdrawalRequest, EDUCATOR_SHARE,
 )
 from .serializers import (
     CategorySerializer, CourseListSerializer, CourseDetailSerializer, CourseWriteSerializer,
@@ -516,9 +517,52 @@ class EnrollView(APIView):
         except Course.DoesNotExist:
             return Response({'detail': 'Course not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # Free courses enroll directly
+        if not course.is_free and course.price > 0:
+            reference = request.data.get('reference', '').strip()
+            if not reference:
+                return Response({'detail': 'Payment reference is required for paid courses.'}, status=status.HTTP_400_BAD_REQUEST)
+            # Verify payment with Paystack
+            import requests as http_requests
+            from django.conf import settings
+            paystack_secret = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
+            verify_resp = http_requests.get(
+                f'https://api.paystack.co/transaction/verify/{reference}',
+                headers={'Authorization': f'Bearer {paystack_secret}'},
+                timeout=10,
+            )
+            if verify_resp.status_code != 200:
+                return Response({'detail': 'Payment verification failed.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+            verify_data = verify_resp.json()
+            if not verify_data.get('status') or verify_data.get('data', {}).get('status') != 'success':
+                return Response({'detail': 'Payment was not successful.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+            # Confirm amount matches course price (in kobo)
+            paid_amount = verify_data['data'].get('amount', 0)
+            expected_kobo = int(float(course.price) * 100)
+            if paid_amount < expected_kobo:
+                return Response({'detail': 'Payment amount does not match course price.'}, status=status.HTTP_402_PAYMENT_REQUIRED)
+
         enrollment, created = Enrollment.objects.get_or_create(learner=request.user, course=course)
         if not created:
             return Response({'detail': 'Already enrolled.'}, status=status.HTTP_200_OK)
+
+        # Credit educator wallet with 60% of course price
+        if not course.is_free and course.price > 0:
+            from decimal import Decimal
+            from django.db import transaction as db_transaction
+            educator_share = (course.price * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
+            with db_transaction.atomic():
+                wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=course.instructor)
+                wallet.balance += educator_share
+                wallet.total_earned += educator_share
+                wallet.save()
+                EducatorTransaction.objects.create(
+                    wallet=wallet,
+                    amount=educator_share,
+                    transaction_type='credit',
+                    description=f'60% share from {request.user.username} enrolling in "{course.title}"',
+                    course=course,
+                )
 
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
 
@@ -1126,3 +1170,106 @@ class SessionUnregisterView(APIView):
             return Response({'detail': 'Not registered.'}, status=status.HTTP_404_NOT_FOUND)
         registration.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Educator Wallet ───────────────────────────────────────────────────────────
+
+class EducatorWalletView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        # Only educators have a wallet
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'educator':
+            return Response({'detail': 'Only educators have a wallet.'}, status=status.HTTP_403_FORBIDDEN)
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+        transactions = wallet.transactions.all()[:20]
+        return Response({
+            'balance': str(wallet.balance),
+            'total_earned': str(wallet.total_earned),
+            'total_withdrawn': str(wallet.total_withdrawn),
+            'transactions': [
+                {
+                    'id': t.id,
+                    'amount': str(t.amount),
+                    'type': t.transaction_type,
+                    'description': t.description,
+                    'course': t.course.title if t.course else None,
+                    'created_at': t.created_at,
+                }
+                for t in transactions
+            ],
+        })
+
+
+class WithdrawalRequestView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+        withdrawals = wallet.withdrawals.all()[:10]
+        return Response([
+            {
+                'id': w.id,
+                'amount': str(w.amount),
+                'bank_name': w.bank_name,
+                'account_number': w.account_number,
+                'account_name': w.account_name,
+                'status': w.status,
+                'created_at': w.created_at,
+            }
+            for w in withdrawals
+        ])
+
+    def post(self, request):
+        from decimal import Decimal, InvalidOperation
+
+        # Only educators can withdraw
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'educator':
+            return Response({'detail': 'Only educators can withdraw.'}, status=status.HTTP_403_FORBIDDEN)
+
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+
+        try:
+            amount = Decimal(str(request.data.get('amount', '0'))).quantize(Decimal('0.01'))
+        except InvalidOperation:
+            return Response({'detail': 'Invalid amount.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        bank_name = request.data.get('bank_name', '').strip()
+        account_number = request.data.get('account_number', '').strip()
+        account_name = request.data.get('account_name', '').strip()
+
+        if not all([bank_name, account_number, account_name]):
+            return Response({'detail': 'Bank name, account number and account name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({'detail': 'Amount must be greater than zero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount > wallet.balance:
+            return Response({'detail': f'Insufficient balance. Available: ₦{wallet.balance}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Deduct from wallet immediately and create withdrawal request
+        wallet.balance -= amount
+        wallet.total_withdrawn += amount
+        wallet.save()
+
+        EducatorTransaction.objects.create(
+            wallet=wallet,
+            amount=amount,
+            transaction_type='debit',
+            description=f'Withdrawal request to {bank_name} — {account_number}',
+        )
+
+        withdrawal = WithdrawalRequest.objects.create(
+            wallet=wallet,
+            amount=amount,
+            bank_name=bank_name,
+            account_number=account_number,
+            account_name=account_name,
+        )
+
+        return Response({
+            'id': withdrawal.id,
+            'amount': str(withdrawal.amount),
+            'status': withdrawal.status,
+            'message': 'Withdrawal request submitted. You will receive your money in 1-2 business working days.',
+        }, status=status.HTTP_201_CREATED)

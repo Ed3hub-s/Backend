@@ -4,7 +4,7 @@ from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
     Assessment, CourseResource, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Certificate,
-    Session, SessionRegistration
+    Session, SessionRegistration, EducatorWallet, EducatorTransaction, WithdrawalRequest
 )
 
 
@@ -200,3 +200,30 @@ class SessionRegistrationAdmin(ModelAdmin):
     list_display = ('learner', 'session', 'registered_at', 'attended')
     list_filter = ('attended', 'registered_at')
     search_fields = ('learner__username', 'session__title')
+
+
+class EducatorTransactionInline(TabularInline):
+    model = EducatorTransaction
+    extra = 0
+    readonly_fields = ('created_at',)
+
+
+@admin.register(EducatorWallet)
+class EducatorWalletAdmin(ModelAdmin):
+    list_display = ('educator', 'balance', 'total_earned', 'total_withdrawn', 'updated_at')
+    search_fields = ('educator__username',)
+    readonly_fields = ('total_earned', 'total_withdrawn', 'updated_at')
+    inlines = [EducatorTransactionInline]
+
+
+@admin.register(WithdrawalRequest)
+class WithdrawalRequestAdmin(ModelAdmin):
+    list_display = ('get_educator', 'amount', 'bank_name', 'account_number', 'account_name', 'status', 'created_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('wallet__educator__username', 'account_name', 'bank_name')
+    readonly_fields = ('created_at',)
+    fields = ('wallet', 'amount', 'bank_name', 'account_number', 'account_name', 'status', 'admin_note', 'created_at')
+
+    def get_educator(self, obj):
+        return obj.wallet.educator.username
+    get_educator.short_description = 'Educator'
