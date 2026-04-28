@@ -532,8 +532,8 @@ class EnrollView(APIView):
             educator_share = (course.price * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
             with db_transaction.atomic():
                 wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=course.instructor)
-                wallet.balance += educator_share
-                wallet.total_earned += educator_share
+                wallet.balance = Decimal(str(wallet.balance)) + educator_share
+                wallet.total_earned = Decimal(str(wallet.total_earned)) + educator_share
                 wallet.save()
                 EducatorTransaction.objects.create(
                     wallet=wallet,
@@ -1231,8 +1231,8 @@ class WithdrawalRequestView(APIView):
             return Response({'detail': f'Insufficient balance. Available: ₦{wallet.balance}'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Deduct from wallet immediately and create withdrawal request
-        wallet.balance -= amount
-        wallet.total_withdrawn += amount
+        wallet.balance = Decimal(str(wallet.balance)) - amount
+        wallet.total_withdrawn = Decimal(str(wallet.total_withdrawn)) + amount
         wallet.save()
 
         EducatorTransaction.objects.create(
