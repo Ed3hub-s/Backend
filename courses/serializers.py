@@ -38,6 +38,7 @@ class QuizSerializer(serializers.ModelSerializer):
 
 class LessonSerializer(serializers.ModelSerializer):
     quiz = QuizSerializer(read_only=True)
+    video_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Lesson
@@ -45,6 +46,12 @@ class LessonSerializer(serializers.ModelSerializer):
             'id', 'title', 'lesson_type', 'order', 'duration_minutes',
             'video_url', 'content', 'transcript', 'is_free_preview', 'quiz',
         )
+
+    def get_video_url(self, obj):
+        if obj.video_file:
+            request = self.context.get('request')
+            return request.build_absolute_uri(obj.video_file.url) if request else obj.video_file.url
+        return None
 
 
 class AssessmentSerializer(serializers.ModelSerializer):
@@ -100,7 +107,7 @@ class CourseWriteSerializer(serializers.ModelSerializer):
             'tools_used', 'ideal_for', 'what_included', 'what_you_learn',
             'completion_tokens',
         )
-        read_only_fields = ('id', 'slug', 'completion_tokens')
+        read_only_fields = ('id', 'completion_tokens')
 
 
 class CourseListSerializer(serializers.ModelSerializer):
@@ -110,6 +117,7 @@ class CourseListSerializer(serializers.ModelSerializer):
     total_reviews = serializers.IntegerField(read_only=True)
     total_enrolled = serializers.IntegerField(read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
+    thumbnail = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -117,11 +125,20 @@ class CourseListSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'thumbnail', 'skill_level', 'price', 'is_free',
             'instructor_name', 'average_rating', 'total_reviews', 'total_enrolled',
             'category_name', 'estimated_hours', 'is_published',
+            # Fields needed for the edit form
+            'description', 'what_you_learn', 'ideal_for', 'tools_used',
+            'what_included', 'hours_per_week', 'duration_weeks', 'is_self_paced',
         )
 
     def get_instructor_name(self, obj):
         full = f'{obj.instructor.first_name} {obj.instructor.last_name}'.strip()
         return full or obj.instructor.username
+
+    def get_thumbnail(self, obj):
+        if obj.thumbnail:
+            request = self.context.get('request')
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None
 
 
 class CourseDetailSerializer(serializers.ModelSerializer):
@@ -135,6 +152,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
     assessments = AssessmentSerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
     category = CategorySerializer(read_only=True)
+    thumbnail = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -152,6 +170,12 @@ class CourseDetailSerializer(serializers.ModelSerializer):
         full = f'{obj.instructor.first_name} {obj.instructor.last_name}'.strip()
         return full or obj.instructor.username
 
+    def get_thumbnail(self, obj):
+        if obj.thumbnail:
+            request = self.context.get('request')
+            return request.build_absolute_uri(obj.thumbnail.url) if request else obj.thumbnail.url
+        return None
+
 
 class LessonProgressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -168,10 +192,17 @@ class ModuleProgressSerializer(serializers.ModelSerializer):
 class EnrollmentSerializer(serializers.ModelSerializer):
     course = CourseListSerializer(read_only=True)
     lesson_progress = LessonProgressSerializer(many=True, read_only=True)
+    certificate_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Enrollment
-        fields = ('id', 'course', 'enrolled_at', 'completed', 'completed_at', 'progress_percent', 'lesson_progress')
+        fields = ('id', 'course', 'enrolled_at', 'completed', 'completed_at', 'progress_percent', 'lesson_progress', 'certificate_id')
+
+    def get_certificate_id(self, obj):
+        try:
+            return obj.certificate.certificate_id
+        except Exception:
+            return None
 
 
 class TokenTransactionSerializer(serializers.ModelSerializer):
@@ -192,21 +223,44 @@ class CertificateSerializer(serializers.ModelSerializer):
     course_title = serializers.CharField(source='enrollment.course.title', read_only=True)
     course_slug = serializers.CharField(source='enrollment.course.slug', read_only=True)
     learner_name = serializers.SerializerMethodField()
+    instructor_name = serializers.SerializerMethodField()
     pdf_url = serializers.SerializerMethodField()
+    qr_code_url = serializers.SerializerMethodField()
+    verify_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Certificate
-        fields = ('id', 'cert_type', 'issued_at', 'course_title', 'course_slug', 'learner_name', 'pdf_url', 'nft_tx_hash')
+        fields = (
+            'id', 'certificate_id', 'cert_type', 'issued_at', 
+            'course_title', 'course_slug', 'learner_name', 'instructor_name', 
+            'pdf_url', 'qr_code_url', 'verify_url', 'nft_tx_hash'
+        )
 
     def get_learner_name(self, obj):
         u = obj.enrollment.learner
         return f'{u.first_name} {u.last_name}'.strip() or u.username
+
+    def get_instructor_name(self, obj):
+        u = obj.enrollment.course.instructor
+        full = f'{u.first_name} {u.last_name}'.strip()
+        return full if full else u.username
 
     def get_pdf_url(self, obj):
         if obj.pdf_file:
             request = self.context.get('request')
             return request.build_absolute_uri(obj.pdf_file.url) if request else obj.pdf_file.url
         return None
+
+    def get_qr_code_url(self, obj):
+        if obj.qr_code:
+            request = self.context.get('request')
+            return request.build_absolute_uri(obj.qr_code.url) if request else obj.qr_code.url
+        return None
+
+    def get_verify_url(self, obj):
+        from django.conf import settings
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'https://ed3hub.com').rstrip('/')
+        return f'{frontend_url}/certificate/verify/{obj.certificate_id}'
 
 
 class SessionRegistrationSerializer(serializers.ModelSerializer):

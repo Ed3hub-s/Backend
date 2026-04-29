@@ -12,17 +12,16 @@ services:
 
   backend:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-backend
     ports:
       - "8000:8000"
     volumes:
-      - ./Backend:/app
+      - .:/app
       - backend-media:/app/media
-      - backend-static:/app/staticfiles
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - DEBUG=True
       - ALLOWED_HOSTS=*
@@ -36,14 +35,14 @@ services:
 
   celery:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-celery
     command: celery -A core worker -l info
     volumes:
-      - ./Backend:/app
+      - .:/app
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -56,14 +55,14 @@ services:
 
   celery-beat:
     build:
-      context: ./Backend
+      context: .
       dockerfile: Dockerfile
     container_name: ed3hub-celery-beat
     command: celery -A core beat -l info
     volumes:
-      - ./Backend:/app
+      - .:/app
     env_file:
-      - ./Backend/.env
+      - ./.env
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
@@ -76,14 +75,18 @@ services:
 
   frontend:
     build:
-      context: ./Frontend
+      context: ../Frontend
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=https://dev-api.ed3hub.com
+        - NEXT_PUBLIC_WS_URL=wss://dev-api.ed3hub.com
+        - NEXT_PUBLIC_GOOGLE_CLIENT_ID=793067091414-e1k27kr5ub9btdtgmfpd5hfv9svjlht8.apps.googleusercontent.com
     container_name: ed3hub-frontend
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+      - NEXT_PUBLIC_API_URL=https://dev-api.ed3hub.com
+      - NEXT_PUBLIC_WS_URL=wss://dev-api.ed3hub.com
     depends_on:
       - backend
     networks:
@@ -92,7 +95,6 @@ services:
 
 volumes:
   backend-media:
-  backend-static:
 
 networks:
   ed3hub-network:

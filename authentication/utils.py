@@ -1,14 +1,11 @@
 import logging
 import random
-import sys
-import threading
 from datetime import timedelta
 
-from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
 
 from .models import OTPCode
+from .email_utils import send_smart_email
 
 logger = logging.getLogger(__name__)
 
@@ -34,23 +31,18 @@ OTP_HTML_TEMPLATE = """
 """
 
 
-def _send_in_background(to_mail: str, mail_subject: str, html_message: str):
-    """Sends email in a background thread using credentials from settings."""
+def _send_otp_email(to_mail: str, mail_subject: str, html_message: str):
     try:
-        email_sent = send_mail(
+        send_smart_email(
             subject=mail_subject,
-            message='',
-            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+            body='',
             recipient_list=[to_mail],
             html_message=html_message,
-            fail_silently=False,
         )
-        if email_sent:
-            logger.info(f'OTP email sent to {to_mail}')
-        else:
-            logger.warning(f'OTP email not sent to {to_mail}')
+        logger.info(f'OTP email sent to {to_mail}')
     except Exception as e:
         logger.error(f'Failed to send OTP email to {to_mail}: {e}')
+        raise
 
 
 RESET_HTML_TEMPLATE = """
@@ -83,18 +75,8 @@ def create_and_send_reset_otp(email: str) -> str:
         code=code,
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-
-    msg = f'\n========== PASSWORD RESET OTP FOR {email} ==========\nCode: {code}\n====================================================\n'
-    sys.stdout.write(msg)
-    sys.stdout.flush()
-    print(msg, flush=True)
-
     html_message = RESET_HTML_TEMPLATE.format(code=code)
-    threading.Thread(
-        target=_send_in_background,
-        args=(email, 'Reset Your Ed3Hub Password', html_message),
-        daemon=True,
-    ).start()
+    _send_otp_email(email, 'Reset Your Ed3Hub Password', html_message)
     return code
 
 
@@ -106,17 +88,6 @@ def create_and_send_otp(email: str) -> str:
         code=code,
         expires_at=timezone.now() + timedelta(minutes=10),
     )
-
-    msg = f'\n========== OTP FOR {email} ==========\nCode: {code}\n=====================================\n'
-    sys.stdout.write(msg)
-    sys.stdout.flush()
-    print(msg, flush=True)
-
     html_message = OTP_HTML_TEMPLATE.format(code=code)
-    threading.Thread(
-        target=_send_in_background,
-        args=(email, 'Your Ed3Hub Verification Code', html_message),
-        daemon=True,
-    ).start()
-
+    _send_otp_email(email, 'Your Ed3Hub Verification Code', html_message)
     return code

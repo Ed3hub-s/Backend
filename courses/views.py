@@ -10,6 +10,7 @@ from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
     Certificate, Quiz, Question, Choice, Session, SessionRegistration,
+    EducatorWallet, EducatorTransaction, WithdrawalRequest, EDUCATOR_SHARE,
 )
 from .serializers import (
     CategorySerializer, CourseListSerializer, CourseDetailSerializer, CourseWriteSerializer,
@@ -128,7 +129,6 @@ def create_course_content(course, modules_data):
                 lesson_type=lesson_type,
                 order=lesson_idx + 1,
                 duration_minutes=duration_minutes,
-                video_url=lesson_data.get('videoUrl', ''),
                 content=lesson_data.get('content', ''),
             )
             logger.info(f"Created lesson: {lesson.id} - {lesson.title}")
@@ -234,11 +234,14 @@ class CategoryListView(generics.ListAPIView):
 
 class EducatorCourseListView(generics.ListAPIView):
     """Returns all courses (published + draft) created by the authenticated educator."""
-    serializer_class = CourseWriteSerializer
+    serializer_class = CourseListSerializer
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
         return Course.objects.filter(instructor=self.request.user).select_related('instructor', 'category')
+
+    def get_serializer_context(self):
+        return {'request': self.request}
 
 
 class CourseCreateView(APIView):
@@ -254,11 +257,6 @@ class CourseCreateView(APIView):
         data = request.data.copy()
         logger.info(f"Received data keys: {data.keys()}")
         
-        base_slug = slugify(data.get('title', ''))[:50] or 'course'
-        slug = base_slug
-        if Course.objects.filter(slug=slug).exists():
-            slug = f'{base_slug}-{uuid.uuid4().hex[:6]}'
-        data['slug'] = slug
         data['completion_tokens'] = 10
         
         # Extract modules data
@@ -313,9 +311,8 @@ class CourseUpdateView(APIView):
     parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def patch(self, request, course_id):
-        import logging
-        logger = logging.getLogger(__name__)
-        
+        import uuid
+
         try:
             course = Course.objects.get(id=course_id, instructor=request.user)
         except Course.DoesNotExist:
@@ -326,34 +323,20 @@ class CourseUpdateView(APIView):
         # Extract modules data
         modules_json = data.pop('modules', None)
         modules_data = None
-        
-        logger.info(f"Modules JSON type: {type(modules_json)}")
-        logger.info(f"Modules JSON value: {repr(modules_json)[:200]}")
-        
+
         if modules_json:
             if isinstance(modules_json, str):
                 try:
-                    # First parse
                     parsed = json.loads(modules_json)
-                    logger.info(f"First parse type: {type(parsed)}")
-                    
-                    # Check if it's a string that needs another parse (double-encoded)
                     if isinstance(parsed, str):
-                        logger.info("Double-encoded JSON detected, parsing again")
                         modules_data = json.loads(parsed)
                     else:
                         modules_data = parsed
-                    
-                    logger.info(f"Final parsed modules type: {type(modules_data)}")
-                    logger.info(f"Parsed modules count: {len(modules_data) if isinstance(modules_data, list) else 'not a list'}")
                 except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error: {str(e)}")
                     return Response({'detail': f'Invalid JSON in modules: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
             elif isinstance(modules_json, list):
                 modules_data = modules_json
-                logger.info(f"Modules data is already a list: {len(modules_data)} modules")
             else:
-                logger.error(f"Modules is neither string nor list: {type(modules_json)}")
                 return Response({'detail': 'Modules must be a JSON string or list'}, status=status.HTTP_400_BAD_REQUEST)
         
         serializer = CourseWriteSerializer(course, data=data, partial=True)
@@ -363,9 +346,90 @@ class CourseUpdateView(APIView):
         
         # Update modules if provided
         if modules_data:
-            logger.info(f"Creating course content with {len(modules_data)} modules")
-            course.modules.all().delete()
-            create_course_content(course, modules_data)
+            existing_modules = list(course.modules.all().order_by('order'))
+            for idx, module_data in enumerate(modules_data):
+                if not isinstance(module_data, dict):
+                    continue
+                # Try to match by existing module at same index
+                if idx < len(existing_modules):
+                    mod = existing_modules[idx]
+                    mod.title = module_data.get('title', mod.title)
+                    mod.order = idx + 1
+                    mod.save()
+                    # Update lessons — preserve existing video files
+                    existing_lessons = list(mod.lessons.all().order_by('order'))
+                    lessons_data = module_data.get('lessons', [])
+                    for lIdx, lesson_data in enumerate(lessons_data):
+                        if not isinstance(lesson_data, dict):
+                            continue
+                        duration_str = lesson_data.get('duration', '0')
+                        duration_minutes = 0
+                        if duration_str:
+                            import re as _re
+                            match = _re.search(r'(\d+)', str(duration_str))
+                            if match:
+                                duration_minutes = int(match.group(1))
+                        lesson_type_map = {'video': 'video', 'text': 'reading', 'document': 'reading'}
+                        lesson_type = lesson_type_map.get(lesson_data.get('type', 'video'), 'video')
+                        if lIdx < len(existing_lessons):
+                            # Update existing lesson, keep its video_file
+                            les = existing_lessons[lIdx]
+                            les.title = lesson_data.get('title', les.title)
+                            les.lesson_type = lesson_type
+                            les.duration_minutes = duration_minutes
+                            les.content = lesson_data.get('content', les.content)
+                            les.order = lIdx + 1
+                            les.save()
+                        else:
+                            # New lesson added
+                            Lesson.objects.create(
+                                module=mod,
+                                title=lesson_data.get('title', f'Lesson {lIdx + 1}'),
+                                lesson_type=lesson_type,
+                                order=lIdx + 1,
+                                duration_minutes=duration_minutes,
+                                content=lesson_data.get('content', ''),
+                            )
+                    # Remove lessons that were deleted
+                    if len(lessons_data) < len(existing_lessons):
+                        for les in existing_lessons[len(lessons_data):]:
+                            if les.video_file:
+                                les.video_file.delete(save=False)
+                            les.delete()
+                else:
+                    # New module
+                    mod = Module.objects.create(
+                        course=course,
+                        title=module_data.get('title', f'Module {idx + 1}'),
+                        order=idx + 1,
+                        reward_tokens=10,
+                    )
+                    for lIdx, lesson_data in enumerate(module_data.get('lessons', [])):
+                        if not isinstance(lesson_data, dict):
+                            continue
+                        duration_str = lesson_data.get('duration', '0')
+                        duration_minutes = 0
+                        if duration_str:
+                            import re as _re
+                            match = _re.search(r'(\d+)', str(duration_str))
+                            if match:
+                                duration_minutes = int(match.group(1))
+                        lesson_type_map = {'video': 'video', 'text': 'reading', 'document': 'reading'}
+                        Lesson.objects.create(
+                            module=mod,
+                            title=lesson_data.get('title', f'Lesson {lIdx + 1}'),
+                            lesson_type=lesson_type_map.get(lesson_data.get('type', 'video'), 'video'),
+                            order=lIdx + 1,
+                            duration_minutes=duration_minutes,
+                            content=lesson_data.get('content', ''),
+                        )
+            # Remove modules that were deleted
+            if len(modules_data) < len(existing_modules):
+                for mod in existing_modules[len(modules_data):]:
+                    for les in mod.lessons.all():
+                        if les.video_file:
+                            les.video_file.delete(save=False)
+                    mod.delete()
         
         return Response(CourseListSerializer(course, context={'request': request}).data)
 
@@ -386,6 +450,35 @@ class CourseListView(generics.ListAPIView):
         if category:
             qs = qs.filter(category__slug=category)
         return qs
+
+    def get_serializer_context(self):
+        return {'request': self.request}
+
+
+class EnrolledCourseDetailView(generics.RetrieveAPIView):
+    """Course detail for enrolled learners — no is_published filter."""
+    serializer_class = CourseDetailSerializer
+    permission_classes = (IsAuthenticated,)
+
+    def get_object(self):
+        course_id = self.kwargs['course_id']
+        # Verify the user is actually enrolled
+        enrollment = Enrollment.objects.filter(
+            learner=self.request.user, course_id=course_id
+        ).first()
+        if not enrollment:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('You are not enrolled in this course.')
+        return Course.objects.prefetch_related(
+            'modules__lessons__quiz__questions__choices',
+            'modules__assessments',
+            'resources',
+            'assessments',
+            'reviews__learner',
+        ).select_related('instructor', 'category').get(id=course_id)
+
+    def get_serializer_context(self):
+        return {'request': self.request}
 
 
 class CourseDetailView(generics.RetrieveAPIView):
@@ -409,6 +502,9 @@ class LessonDetailView(generics.RetrieveAPIView):
     serializer_class = LessonSerializer
     permission_classes = (IsAuthenticated,)
 
+    def get_serializer_context(self):
+        return {'request': self.request}
+
 
 # ── Enrollment ────────────────────────────────────────────────────────────────
 
@@ -417,13 +513,35 @@ class EnrollView(APIView):
 
     def post(self, request, course_id):
         try:
-            course = Course.objects.get(id=course_id, is_published=True)
+            course = Course.objects.get(id=course_id)
         except Course.DoesNotExist:
             return Response({'detail': 'Course not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Free courses enroll directly — skip payment verification for now
+        # TODO: Enable Paystack verification when PAYSTACK_SECRET_KEY is configured
+        pass
 
         enrollment, created = Enrollment.objects.get_or_create(learner=request.user, course=course)
         if not created:
             return Response({'detail': 'Already enrolled.'}, status=status.HTTP_200_OK)
+
+        # Credit educator wallet with 60% of course price
+        if not course.is_free and course.price > 0:
+            from decimal import Decimal
+            from django.db import transaction as db_transaction
+            educator_share = (course.price * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
+            with db_transaction.atomic():
+                wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=course.instructor)
+                wallet.balance = Decimal(str(wallet.balance)) + educator_share
+                wallet.total_earned = Decimal(str(wallet.total_earned)) + educator_share
+                wallet.save()
+                EducatorTransaction.objects.create(
+                    wallet=wallet,
+                    amount=educator_share,
+                    transaction_type='credit',
+                    description=f'60% share from {request.user.username} enrolling in "{course.title}"',
+                    course=course,
+                )
 
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
 
@@ -433,7 +551,11 @@ class MyEnrollmentsView(generics.ListAPIView):
     permission_classes = (IsAuthenticated,)
 
     def get_queryset(self):
-        return Enrollment.objects.filter(learner=self.request.user).select_related('course')
+        return Enrollment.objects.filter(
+            learner=self.request.user
+        ).select_related(
+            'course__instructor', 'course__category'
+        ).prefetch_related('lesson_progress')
 
 
 # ── Progress ──────────────────────────────────────────────────────────────────
@@ -643,29 +765,42 @@ class LessonCreateView(APIView):
             lesson_type=request.data.get('lesson_type', 'video'),
             order=order,
             duration_minutes=int(request.data.get('duration_minutes', 0)),
-            video_url=request.data.get('video_url', ''),
             content=request.data.get('content', ''),
             is_free_preview=str(request.data.get('is_free_preview', 'false')).lower() == 'true',
         )
-        return Response(LessonSerializer(lesson).data, status=201)
+        if 'video_file' in request.FILES:
+            lesson.video_file = request.FILES['video_file']
+            lesson.save()
+        return Response(LessonSerializer(lesson, context={'request': request}).data, status=201)
 
 
 class LessonUpdateView(APIView):
     permission_classes = (IsAuthenticated,)
     parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
+    def get(self, request, lesson_id):
+        try:
+            lesson = Lesson.objects.select_related('module__course').prefetch_related('quiz__questions__choices').get(id=lesson_id)
+        except Lesson.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=404)
+        return Response(LessonSerializer(lesson, context={'request': request}).data)
+
     def patch(self, request, lesson_id):
         try:
             lesson = Lesson.objects.get(id=lesson_id, module__course__instructor=request.user)
         except Lesson.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
-        for field in ('title', 'lesson_type', 'video_url', 'content', 'duration_minutes'):
+        for field in ('title', 'lesson_type', 'content', 'duration_minutes'):
             if field in request.data:
                 setattr(lesson, field, request.data[field])
+        if 'video_file' in request.FILES:
+            if lesson.video_file:
+                lesson.video_file.delete(save=False)
+            lesson.video_file = request.FILES['video_file']
         if 'is_free_preview' in request.data:
             lesson.is_free_preview = str(request.data['is_free_preview']).lower() == 'true'
         lesson.save()
-        return Response(LessonSerializer(lesson).data)
+        return Response(LessonSerializer(lesson, context={'request': request}).data)
 
     def delete(self, request, lesson_id):
         try:
@@ -838,15 +973,50 @@ class IssueCertificateView(APIView):
             return Response({'detail': 'cert_type must be "standard" or "nft".'}, status=status.HTTP_400_BAD_REQUEST)
 
         cert = Certificate.objects.create(enrollment=enrollment, cert_type=cert_type)
-        
+
         # Generate PDF certificate
         if cert_type == 'standard':
             from .utils import generate_certificate_pdf
             generate_certificate_pdf(cert)
         
+        # Refresh from database to ensure certificate_id is populated
+        cert.refresh_from_db()
+        
         return Response(
             CertificateSerializer(cert, context={'request': request}).data,
             status=status.HTTP_201_CREATED,
+        )
+
+
+class RegenerateCertificateView(APIView):
+    """Force regenerate the PDF for an existing certificate."""
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, certificate_id):
+        try:
+            cert = Certificate.objects.get(
+                certificate_id=certificate_id,
+                enrollment__learner=request.user,
+                cert_type='standard',
+            )
+        except Certificate.DoesNotExist:
+            return Response({'detail': 'Certificate not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Delete old files
+        if cert.pdf_file:
+            cert.pdf_file.delete(save=False)
+            cert.pdf_file = None
+        if cert.qr_code:
+            cert.qr_code.delete(save=False)
+            cert.qr_code = None
+        cert.save()
+
+        from .utils import generate_certificate_pdf
+        generate_certificate_pdf(cert)
+
+        return Response(
+            CertificateSerializer(cert, context={'request': request}).data,
+            status=status.HTTP_200_OK,
         )
 
 
@@ -857,21 +1027,22 @@ class MyCertificatesView(generics.ListAPIView):
     def get_queryset(self):
         return Certificate.objects.filter(
             enrollment__learner=self.request.user
-        ).select_related('enrollment__course', 'enrollment__learner')
+        ).select_related('enrollment__course__instructor', 'enrollment__learner')
 
     def get_serializer_context(self):
         return {'request': self.request}
 
 
 class CertificateDetailView(APIView):
-    """View a specific certificate."""
-    permission_classes = (IsAuthenticated,)
+    """View a specific certificate by certificate_id (alphanumeric)."""
+    permission_classes = [AllowAny]
 
     def get(self, request, certificate_id):
         try:
-            certificate = Certificate.objects.select_related('enrollment__course', 'enrollment__learner').get(
-                id=certificate_id, enrollment__learner=request.user
-            )
+            certificate = Certificate.objects.select_related(
+                'enrollment__course__instructor', 
+                'enrollment__learner'
+            ).get(certificate_id=certificate_id)
         except Certificate.DoesNotExist:
             return Response({'detail': 'Certificate not found.'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -982,3 +1153,110 @@ class SessionUnregisterView(APIView):
             return Response({'detail': 'Not registered.'}, status=status.HTTP_404_NOT_FOUND)
         registration.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Educator Wallet ───────────────────────────────────────────────────────────
+
+class EducatorWalletView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        # Only educators have a wallet
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'educator':
+            return Response({'detail': 'Only educators have a wallet.'}, status=status.HTTP_403_FORBIDDEN)
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+        transactions = wallet.transactions.all()[:20]
+        total_courses = Course.objects.filter(instructor=request.user).count()
+        total_students = Enrollment.objects.filter(course__instructor=request.user).values('learner').distinct().count()
+        return Response({
+            'balance': str(wallet.balance),
+            'total_earned': str(wallet.total_earned),
+            'total_withdrawn': str(wallet.total_withdrawn),
+            'total_courses': total_courses,
+            'total_students': total_students,
+            'transactions': [
+                {
+                    'id': t.id,
+                    'amount': str(t.amount),
+                    'type': t.transaction_type,
+                    'description': t.description,
+                    'course': t.course.title if t.course else None,
+                    'created_at': t.created_at,
+                }
+                for t in transactions
+            ],
+        })
+
+
+class WithdrawalRequestView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+        withdrawals = wallet.withdrawals.all()[:10]
+        return Response([
+            {
+                'id': w.id,
+                'amount': str(w.amount),
+                'bank_name': w.bank_name,
+                'account_number': w.account_number,
+                'account_name': w.account_name,
+                'status': w.status,
+                'created_at': w.created_at,
+            }
+            for w in withdrawals
+        ])
+
+    def post(self, request):
+        from decimal import Decimal, InvalidOperation
+
+        # Only educators can withdraw
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'educator':
+            return Response({'detail': 'Only educators can withdraw.'}, status=status.HTTP_403_FORBIDDEN)
+
+        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+
+        try:
+            amount = Decimal(str(request.data.get('amount', '0'))).quantize(Decimal('0.01'))
+        except InvalidOperation:
+            return Response({'detail': 'Invalid amount.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        bank_name = request.data.get('bank_name', '').strip()
+        account_number = request.data.get('account_number', '').strip()
+        account_name = request.data.get('account_name', '').strip()
+
+        if not all([bank_name, account_number, account_name]):
+            return Response({'detail': 'Bank name, account number and account name are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({'detail': 'Amount must be greater than zero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount > wallet.balance:
+            return Response({'detail': f'Insufficient balance. Available: ₦{wallet.balance}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Deduct from wallet immediately and create withdrawal request
+        wallet.balance = Decimal(str(wallet.balance)) - amount
+        wallet.total_withdrawn = Decimal(str(wallet.total_withdrawn)) + amount
+        wallet.save()
+
+        EducatorTransaction.objects.create(
+            wallet=wallet,
+            amount=amount,
+            transaction_type='debit',
+            description=f'Withdrawal request to {bank_name} — {account_number}',
+        )
+
+        withdrawal = WithdrawalRequest.objects.create(
+            wallet=wallet,
+            amount=amount,
+            bank_name=bank_name,
+            account_number=account_number,
+            account_name=account_name,
+        )
+
+        return Response({
+            'id': withdrawal.id,
+            'amount': str(withdrawal.amount),
+            'status': withdrawal.status,
+            'message': 'Withdrawal request submitted. You will receive your money in 1-2 business working days.',
+        }, status=status.HTTP_201_CREATED)

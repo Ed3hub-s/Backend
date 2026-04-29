@@ -1,3 +1,4 @@
+import uuid
 from django.contrib.auth.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
@@ -49,6 +50,18 @@ class Course(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    def save(self, *args, **kwargs):
+        if not self.slug and self.title:
+            from django.utils.text import slugify
+            import uuid
+            base = slugify(self.title)[:50] or 'course'
+            slug = base
+            qs = Course.objects.exclude(pk=self.pk) if self.pk else Course.objects
+            if qs.filter(slug=slug).exists():
+                slug = f'{base}-{uuid.uuid4().hex[:6]}'
+            self.slug = slug
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return self.title
 
@@ -95,7 +108,7 @@ class Lesson(models.Model):
     lesson_type = models.CharField(max_length=20, choices=LESSON_TYPE, default='video')
     order = models.PositiveIntegerField(default=0)
     duration_minutes = models.PositiveIntegerField(default=0)
-    video_url = models.URLField(blank=True, default='')
+    video_file = models.FileField(upload_to='courses/videos/', blank=True, null=True)
     content = models.TextField(blank=True, default='')
     transcript = models.TextField(blank=True, default='')
     is_free_preview = models.BooleanField(default=False)
@@ -268,15 +281,30 @@ class Certificate(models.Model):
     )
 
     enrollment = models.OneToOneField(Enrollment, on_delete=models.CASCADE, related_name='certificate')
+    certificate_id = models.CharField(max_length=20, unique=True, blank=True)
     cert_type = models.CharField(max_length=10, choices=CERT_TYPE)
     issued_at = models.DateTimeField(auto_now_add=True)
     # Standard cert — PDF generated/uploaded here
     pdf_file = models.FileField(upload_to='certificates/', blank=True, null=True)
+    # QR code for verification
+    qr_code = models.ImageField(upload_to='certificates/qr/', blank=True, null=True)
     # NFT cert — blockchain tx hash stored here once integration is live
     nft_tx_hash = models.CharField(max_length=255, blank=True, default='')
 
+    def save(self, *args, **kwargs):
+        if not self.certificate_id:
+            # Generate alphanumeric certificate ID: ED3-XXXX-XXXX
+            while True:
+                unique_id = uuid.uuid4().hex[:8].upper()
+                certificate_id = f'ED3-{unique_id[:4]}-{unique_id[4:8]}'
+                # Ensure uniqueness
+                if not Certificate.objects.filter(certificate_id=certificate_id).exists():
+                    self.certificate_id = certificate_id
+                    break
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f'{self.enrollment.learner.username} — {self.enrollment.course.title} ({self.cert_type})'
+        return f'{self.certificate_id} — {self.enrollment.learner.username} — {self.enrollment.course.title}'
 
 
 class Session(models.Model):
@@ -333,3 +361,63 @@ class SessionRegistration(models.Model):
 
     def __str__(self):
         return f'{self.learner.username} → {self.session.title}'
+
+
+# ── Educator Wallet ───────────────────────────────────────────────────────────
+
+EDUCATOR_SHARE = 0.60   # 60% to educator
+PLATFORM_SHARE = 0.40  # 40% to Ed3Hub
+
+
+class EducatorWallet(models.Model):
+    educator = models.OneToOneField(User, on_delete=models.CASCADE, related_name='educator_wallet')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_earned = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_withdrawn = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.educator.username} — ₦{self.balance}'
+
+
+class EducatorTransaction(models.Model):
+    TYPE_CHOICES = (
+        ('credit', 'Credit'),
+        ('debit', 'Debit'),
+    )
+    wallet = models.ForeignKey(EducatorWallet, on_delete=models.CASCADE, related_name='transactions')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    transaction_type = models.CharField(max_length=10, choices=TYPE_CHOICES)
+    description = models.CharField(max_length=255)
+    course = models.ForeignKey(Course, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.wallet.educator.username} {self.transaction_type} ₦{self.amount}'
+
+
+class WithdrawalRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('processing', 'Processing'),
+        ('completed', 'Completed'),
+        ('rejected', 'Rejected'),
+    )
+    wallet = models.ForeignKey(EducatorWallet, on_delete=models.CASCADE, related_name='withdrawals')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    bank_name = models.CharField(max_length=100)
+    account_number = models.CharField(max_length=20)
+    account_name = models.CharField(max_length=255)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    admin_note = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.wallet.educator.username} — ₦{self.amount} ({self.status})'

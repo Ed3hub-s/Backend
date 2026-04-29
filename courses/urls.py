@@ -1,13 +1,13 @@
 from django.urls import path
 from .views import (
-    CategoryListView, CourseListView, CourseDetailView,
+    CategoryListView, CourseListView, CourseDetailView, EnrolledCourseDetailView,
     EducatorCourseListView, CourseCreateView, CourseUpdateView,
     LessonDetailView,
     EnrollView, MyEnrollmentsView,
     CompleteLessonView, CompleteModuleView,
     CourseReviewView,
     MyWalletView, ClaimTokenView, MyStatsView,
-    IssueCertificateView, MyCertificatesView, CertificateDetailView,
+    IssueCertificateView, MyCertificatesView, CertificateDetailView, RegenerateCertificateView,
     ModuleCreateView, ModuleUpdateView,
     LessonCreateView, LessonUpdateView,
     QuizCreateView, QuizUpdateView,
@@ -15,6 +15,7 @@ from .views import (
     CourseContentView,
     SessionListCreateView, SessionDetailView, PublicSessionListView,
     SessionRegisterView, SessionUnregisterView,
+    EducatorWalletView, WithdrawalRequestView,
 )
 
 urlpatterns = [
@@ -35,7 +36,6 @@ urlpatterns = [
 
     # Lessons
     path('modules/<int:module_id>/lessons/create/', LessonCreateView.as_view(), name='lesson-create'),
-    path('lessons/<int:pk>/', LessonDetailView.as_view(), name='lesson-detail'),
     path('lessons/<int:lesson_id>/', LessonUpdateView.as_view(), name='lesson-update'),
     path('lessons/<int:lesson_id>/complete/', CompleteLessonView.as_view(), name='complete-lesson'),
 
@@ -50,6 +50,7 @@ urlpatterns = [
     # Enrollment
     path('my/enrollments/', MyEnrollmentsView.as_view(), name='my-enrollments'),
     path('my/stats/', MyStatsView.as_view(), name='my-stats'),
+    path('enrolled/<int:course_id>/', EnrolledCourseDetailView.as_view(), name='enrolled-course-detail'),
 
     # Reviews
     path('<int:course_id>/review/', CourseReviewView.as_view(), name='course-review'),
@@ -61,7 +62,8 @@ urlpatterns = [
     # Certificates
     path('my/certificates/', MyCertificatesView.as_view(), name='my-certificates'),
     path('my/certificate/<int:enrollment_id>/', IssueCertificateView.as_view(), name='issue-certificate'),
-    path('certificates/<int:certificate_id>/', CertificateDetailView.as_view(), name='certificate-detail'),
+    path('certificates/<str:certificate_id>/regenerate/', RegenerateCertificateView.as_view(), name='certificate-regenerate'),
+    path('certificates/<str:certificate_id>/', CertificateDetailView.as_view(), name='certificate-detail'),
 
     # Sessions
     path('sessions/', SessionListCreateView.as_view(), name='session-list-create'),
@@ -69,6 +71,10 @@ urlpatterns = [
     path('sessions/<int:session_id>/', SessionDetailView.as_view(), name='session-detail'),
     path('sessions/<int:session_id>/register/', SessionRegisterView.as_view(), name='session-register'),
     path('sessions/<int:session_id>/unregister/', SessionUnregisterView.as_view(), name='session-unregister'),
+
+    # Educator Wallet
+    path('educator/wallet/', EducatorWalletView.as_view(), name='educator-wallet'),
+    path('educator/withdraw/', WithdrawalRequestView.as_view(), name='educator-withdraw'),
 
     # Course detail + enroll (keep last to avoid slug conflicts)
     path('<int:course_id>/enroll/', EnrollView.as_view(), name='enroll'),
