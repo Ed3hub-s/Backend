@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.db import transaction as db_transaction
 from rest_framework import status, generics, filters, parsers
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -222,6 +223,304 @@ def create_course_content(course, modules_data):
             logger.info(f"Created assessment: {assessment.id}")
 
 
+def parse_modules_payload(raw_modules):
+    """Normalize JSON/FormData module payloads into a list of module dicts."""
+    if raw_modules is None:
+        return None
+
+    if isinstance(raw_modules, str):
+        if not raw_modules.strip():
+            return []
+        try:
+            parsed = json.loads(raw_modules)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'Invalid JSON in modules: {exc}') from exc
+        return parse_modules_payload(parsed)
+
+    if isinstance(raw_modules, (list, tuple)):
+        if not raw_modules:
+            return []
+
+        normalized = []
+        for item in raw_modules:
+            parsed = parse_modules_payload(item) if isinstance(item, str) else item
+            if parsed is None:
+                continue
+            if isinstance(parsed, list):
+                normalized.extend(parsed)
+            elif isinstance(parsed, dict):
+                normalized.append(parsed)
+            else:
+                raise ValueError('Modules must be a JSON array of objects.')
+        return normalized
+
+    if isinstance(raw_modules, dict):
+        return [raw_modules]
+
+    raise ValueError('Modules must be a JSON string or list.')
+
+
+def parse_int_id(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_int_value(value, default=0):
+    parsed = parse_int_id(value)
+    return parsed if parsed is not None else default
+
+
+def parse_duration_minutes(value):
+    if value in (None, ''):
+        return 0
+    match = re.search(r'(\d+)', str(value))
+    return int(match.group(1)) if match else 0
+
+
+def frontend_lesson_type(value):
+    return {
+        'video': 'video',
+        'text': 'reading',
+        'document': 'reading',
+        'reading': 'reading',
+        'quiz': 'quiz',
+        'assignment': 'assignment',
+    }.get(value or 'video', 'video')
+
+
+def sync_module_quiz(module, quizzes_data):
+    if quizzes_data is None:
+        return
+    if not isinstance(quizzes_data, list):
+        raise ValueError('Module quizzes must be a list.')
+
+    existing_quiz = getattr(module, 'quiz', None)
+    if not quizzes_data:
+        if existing_quiz:
+            existing_quiz.delete()
+        return
+
+    quiz, _ = Quiz.objects.get_or_create(
+        module=module,
+        defaults={
+            'title': f'{module.title} Quiz',
+            'pass_score': 70,
+            'reward_tokens': 5,
+        },
+    )
+    quiz.title = f'{module.title} Quiz'
+    quiz.save()
+    quiz.questions.all().delete()
+
+    for quiz_idx, quiz_data in enumerate(quizzes_data):
+        if not isinstance(quiz_data, dict):
+            continue
+
+        question_text = quiz_data.get('question') or quiz_data.get('text') or ''
+        if not question_text:
+            continue
+
+        question = Question.objects.create(
+            quiz=quiz,
+            text=question_text,
+            order=quiz_idx + 1,
+        )
+
+        quiz_type = quiz_data.get('type', 'mcq')
+        correct_answer = quiz_data.get('correctAnswer', quiz_data.get('correct_answer', ''))
+
+        if quiz_type == 'true_false':
+            correct = str(correct_answer or 'True').strip().lower()
+            Choice.objects.create(question=question, text='True', is_correct=correct == 'true')
+            Choice.objects.create(question=question, text='False', is_correct=correct == 'false')
+            continue
+
+        if quiz_type == 'fill_blank':
+            if correct_answer:
+                Choice.objects.create(question=question, text=str(correct_answer), is_correct=True)
+            continue
+
+        correct_values = correct_answer if isinstance(correct_answer, list) else [correct_answer]
+        correct_values = {str(value).strip() for value in correct_values}
+        for option in quiz_data.get('options', []):
+            if option and str(option).strip():
+                Choice.objects.create(
+                    question=question,
+                    text=str(option),
+                    is_correct=str(option).strip() in correct_values,
+                )
+
+
+def sync_module_assessments(course, module, assessments_data):
+    if assessments_data is None:
+        return
+    if not isinstance(assessments_data, list):
+        raise ValueError('Module assessments must be a list.')
+
+    existing = list(module.assessments.all().order_by('id'))
+    existing_by_id = {assessment.id: assessment for assessment in existing}
+    used_ids = set()
+
+    for idx, assessment_data in enumerate(assessments_data):
+        if not isinstance(assessment_data, dict):
+            continue
+
+        assessment_id = parse_int_id(assessment_data.get('id'))
+        assessment = existing_by_id.get(assessment_id)
+        if assessment is None and assessment_id is None and idx < len(existing):
+            candidate = existing[idx]
+            if candidate.id not in used_ids:
+                assessment = candidate
+        if assessment is None:
+            assessment = Assessment(course=course, module=module)
+
+        assessment.title = (
+            assessment_data.get('question')
+            or assessment_data.get('title')
+            or assessment.title
+            or 'Assessment'
+        )[:255]
+        assessment.description = (
+            assessment_data.get('expectedAnswer')
+            or assessment_data.get('description')
+            or ''
+        )
+        assessment.assessment_type = (
+            assessment_data.get('assessment_type')
+            if assessment_data.get('assessment_type') in {'graded', 'practice'}
+            else assessment.assessment_type or 'graded'
+        )
+        assessment.duration_minutes = parse_duration_minutes(
+            assessment_data.get('duration_minutes', assessment.duration_minutes or 20)
+        ) or 20
+        assessment.reward_tokens = parse_int_value(
+            assessment_data.get('reward_tokens'),
+            assessment.reward_tokens or 15,
+        )
+        assessment.course = course
+        assessment.module = module
+        assessment.save()
+        used_ids.add(assessment.id)
+
+    for assessment in existing:
+        if assessment.id not in used_ids:
+            assessment.delete()
+
+
+def sync_module_lessons(module, lessons_data):
+    if lessons_data is None:
+        return
+    if not isinstance(lessons_data, list):
+        raise ValueError('Module lessons must be a list.')
+
+    existing = list(module.lessons.all().order_by('order'))
+    existing_by_id = {lesson.id: lesson for lesson in existing}
+    used_ids = set()
+
+    for lesson_idx, lesson_data in enumerate(lessons_data):
+        if not isinstance(lesson_data, dict):
+            continue
+
+        lesson_id = parse_int_id(lesson_data.get('id'))
+        lesson = existing_by_id.get(lesson_id)
+        if lesson is None and lesson_id is None and lesson_idx < len(existing):
+            candidate = existing[lesson_idx]
+            if candidate.id not in used_ids:
+                lesson = candidate
+        if lesson is None:
+            lesson = Lesson(module=module)
+
+        lesson.title = lesson_data.get('title') or lesson.title or f'Lesson {lesson_idx + 1}'
+        lesson.lesson_type = frontend_lesson_type(lesson_data.get('type', lesson_data.get('lesson_type')))
+        lesson.order = lesson_idx + 1
+        lesson.duration_minutes = parse_duration_minutes(
+            lesson_data.get('duration', lesson_data.get('duration_minutes', lesson.duration_minutes))
+        )
+        if 'content' in lesson_data:
+            lesson.content = lesson_data.get('content') or ''
+        if 'is_free_preview' in lesson_data:
+            lesson.is_free_preview = str(lesson_data.get('is_free_preview')).lower() == 'true'
+        lesson.module = module
+        lesson.save()
+        used_ids.add(lesson.id)
+
+    for lesson in existing:
+        if lesson.id not in used_ids:
+            if lesson.video_file:
+                lesson.video_file.delete(save=False)
+            lesson.delete()
+
+
+def sync_course_content(course, modules_data):
+    if modules_data is None:
+        return
+    if not isinstance(modules_data, list):
+        raise ValueError('Modules must be a list.')
+
+    existing = list(course.modules.all().order_by('order'))
+    existing_by_id = {module.id: module for module in existing}
+    used_ids = set()
+
+    for idx, module_data in enumerate(modules_data):
+        if not isinstance(module_data, dict):
+            continue
+
+        module_id = parse_int_id(module_data.get('id'))
+        module = existing_by_id.get(module_id)
+        if module is None and module_id is None and idx < len(existing):
+            candidate = existing[idx]
+            if candidate.id not in used_ids:
+                module = candidate
+        if module is None:
+            module = Module(course=course)
+
+        module.title = module_data.get('title') or module.title or f'Module {idx + 1}'
+        module.order = idx + 1
+        module.reward_tokens = parse_int_value(
+            module_data.get('reward_tokens'),
+            module.reward_tokens or 10,
+        )
+        module.course = course
+        module.save()
+        used_ids.add(module.id)
+
+        sync_module_lessons(module, module_data.get('lessons'))
+        sync_module_quiz(module, module_data.get('quizzes'))
+        sync_module_assessments(course, module, module_data.get('assessments'))
+
+    for module in existing:
+        if module.id not in used_ids:
+            for lesson in module.lessons.all():
+                if lesson.video_file:
+                    lesson.video_file.delete(save=False)
+            module.delete()
+
+
+def recalculate_course_enrollments(course):
+    total_lessons = Lesson.objects.filter(module__course=course).count()
+    for enrollment in course.enrollments.all():
+        if total_lessons == 0:
+            enrollment.progress_percent = 0
+            enrollment.completed = False
+            enrollment.completed_at = None
+        else:
+            completed = LessonProgress.objects.filter(
+                enrollment=enrollment,
+                completed=True,
+                lesson__module__course=course,
+            ).count()
+            enrollment.progress_percent = round((completed / total_lessons) * 100)
+            if enrollment.progress_percent >= 100:
+                enrollment.completed = True
+                enrollment.completed_at = enrollment.completed_at or timezone.now()
+            else:
+                enrollment.completed = False
+                enrollment.completed_at = None
+        enrollment.save(update_fields=('progress_percent', 'completed', 'completed_at'))
+
+
 # ── Categories ────────────────────────────────────────────────────────────────
 
 class CategoryListView(generics.ListAPIView):
@@ -249,8 +548,6 @@ class CourseCreateView(APIView):
     parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def post(self, request):
-        from django.utils.text import slugify
-        import uuid
         import logging
         logger = logging.getLogger(__name__)
         
@@ -259,49 +556,24 @@ class CourseCreateView(APIView):
         
         data['completion_tokens'] = 10
         
-        # Extract modules data
-        modules_json = data.pop('modules', None)
-        modules_data = []
-        
-        logger.info(f"Modules JSON type: {type(modules_json)}")
-        logger.info(f"Modules JSON value: {repr(modules_json)[:200]}")
-        
-        if modules_json:
-            if isinstance(modules_json, str):
-                try:
-                    # First parse
-                    parsed = json.loads(modules_json)
-                    logger.info(f"First parse type: {type(parsed)}")
-                    
-                    # Check if it's a string that needs another parse (double-encoded)
-                    if isinstance(parsed, str):
-                        logger.info("Double-encoded JSON detected, parsing again")
-                        modules_data = json.loads(parsed)
-                    else:
-                        modules_data = parsed
-                    
-                    logger.info(f"Final parsed modules type: {type(modules_data)}")
-                    logger.info(f"Parsed modules: {len(modules_data)} modules")
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error: {str(e)}")
-                    modules_data = []
-            elif isinstance(modules_json, list):
-                modules_data = modules_json
-                logger.info(f"Modules already list: {len(modules_data)} modules")
+        try:
+            modules_data = parse_modules_payload(data.pop('modules', None))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         serializer = CourseWriteSerializer(data=data)
         if not serializer.is_valid():
             logger.error(f"Serializer errors: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        course = serializer.save(instructor=request.user, completion_tokens=10)
-        logger.info(f"Course created: {course.id}")
-        
-        # Create modules, lessons, quizzes, and assessments
-        if modules_data:
-            logger.info(f"Creating content for {len(modules_data)} modules")
-            create_course_content(course, modules_data)
-        else:
-            logger.warning("No modules data to create")
+
+        try:
+            with db_transaction.atomic():
+                course = serializer.save(instructor=request.user, completion_tokens=10)
+                logger.info(f"Course created: {course.id}")
+                if modules_data is not None:
+                    sync_course_content(course, modules_data)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(CourseListSerializer(course, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
@@ -311,8 +583,6 @@ class CourseUpdateView(APIView):
     parser_classes = [parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser]
 
     def patch(self, request, course_id):
-        import uuid
-
         try:
             course = Course.objects.get(id=course_id, instructor=request.user)
         except Course.DoesNotExist:
@@ -320,116 +590,23 @@ class CourseUpdateView(APIView):
         data = request.data.copy()
         data.pop('completion_tokens', None)
         
-        # Extract modules data
-        modules_json = data.pop('modules', None)
-        modules_data = None
-
-        if modules_json:
-            if isinstance(modules_json, str):
-                try:
-                    parsed = json.loads(modules_json)
-                    if isinstance(parsed, str):
-                        modules_data = json.loads(parsed)
-                    else:
-                        modules_data = parsed
-                except json.JSONDecodeError as e:
-                    return Response({'detail': f'Invalid JSON in modules: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-            elif isinstance(modules_json, list):
-                modules_data = modules_json
-            else:
-                return Response({'detail': 'Modules must be a JSON string or list'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            modules_data = parse_modules_payload(data.pop('modules', None))
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         serializer = CourseWriteSerializer(course, data=data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        serializer.save()
-        
-        # Update modules if provided
-        if modules_data:
-            existing_modules = list(course.modules.all().order_by('order'))
-            for idx, module_data in enumerate(modules_data):
-                if not isinstance(module_data, dict):
-                    continue
-                # Try to match by existing module at same index
-                if idx < len(existing_modules):
-                    mod = existing_modules[idx]
-                    mod.title = module_data.get('title', mod.title)
-                    mod.order = idx + 1
-                    mod.save()
-                    # Update lessons — preserve existing video files
-                    existing_lessons = list(mod.lessons.all().order_by('order'))
-                    lessons_data = module_data.get('lessons', [])
-                    for lIdx, lesson_data in enumerate(lessons_data):
-                        if not isinstance(lesson_data, dict):
-                            continue
-                        duration_str = lesson_data.get('duration', '0')
-                        duration_minutes = 0
-                        if duration_str:
-                            import re as _re
-                            match = _re.search(r'(\d+)', str(duration_str))
-                            if match:
-                                duration_minutes = int(match.group(1))
-                        lesson_type_map = {'video': 'video', 'text': 'reading', 'document': 'reading'}
-                        lesson_type = lesson_type_map.get(lesson_data.get('type', 'video'), 'video')
-                        if lIdx < len(existing_lessons):
-                            # Update existing lesson, keep its video_file
-                            les = existing_lessons[lIdx]
-                            les.title = lesson_data.get('title', les.title)
-                            les.lesson_type = lesson_type
-                            les.duration_minutes = duration_minutes
-                            les.content = lesson_data.get('content', les.content)
-                            les.order = lIdx + 1
-                            les.save()
-                        else:
-                            # New lesson added
-                            Lesson.objects.create(
-                                module=mod,
-                                title=lesson_data.get('title', f'Lesson {lIdx + 1}'),
-                                lesson_type=lesson_type,
-                                order=lIdx + 1,
-                                duration_minutes=duration_minutes,
-                                content=lesson_data.get('content', ''),
-                            )
-                    # Remove lessons that were deleted
-                    if len(lessons_data) < len(existing_lessons):
-                        for les in existing_lessons[len(lessons_data):]:
-                            if les.video_file:
-                                les.video_file.delete(save=False)
-                            les.delete()
-                else:
-                    # New module
-                    mod = Module.objects.create(
-                        course=course,
-                        title=module_data.get('title', f'Module {idx + 1}'),
-                        order=idx + 1,
-                        reward_tokens=10,
-                    )
-                    for lIdx, lesson_data in enumerate(module_data.get('lessons', [])):
-                        if not isinstance(lesson_data, dict):
-                            continue
-                        duration_str = lesson_data.get('duration', '0')
-                        duration_minutes = 0
-                        if duration_str:
-                            import re as _re
-                            match = _re.search(r'(\d+)', str(duration_str))
-                            if match:
-                                duration_minutes = int(match.group(1))
-                        lesson_type_map = {'video': 'video', 'text': 'reading', 'document': 'reading'}
-                        Lesson.objects.create(
-                            module=mod,
-                            title=lesson_data.get('title', f'Lesson {lIdx + 1}'),
-                            lesson_type=lesson_type_map.get(lesson_data.get('type', 'video'), 'video'),
-                            order=lIdx + 1,
-                            duration_minutes=duration_minutes,
-                            content=lesson_data.get('content', ''),
-                        )
-            # Remove modules that were deleted
-            if len(modules_data) < len(existing_modules):
-                for mod in existing_modules[len(modules_data):]:
-                    for les in mod.lessons.all():
-                        if les.video_file:
-                            les.video_file.delete(save=False)
-                    mod.delete()
+
+        try:
+            with db_transaction.atomic():
+                serializer.save()
+                if modules_data is not None:
+                    sync_course_content(course, modules_data)
+                    recalculate_course_enrollments(course)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(CourseListSerializer(course, context={'request': request}).data)
 
