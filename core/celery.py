@@ -22,4 +22,8 @@ app.conf.beat_schedule = {
         'task': 'notifications.tasks.cleanup_old_notifications',
         'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
     },
+    'send-due-newsletters': {
+        'task': 'authentication.tasks.send_due_newsletters',
+        'schedule': crontab(minute='*/10'),  # Every 10 minutes
+    },
 }

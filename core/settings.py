@@ -216,6 +216,7 @@ UNFOLD = {
                 'items': [
                     {'title': 'Users', 'icon': 'person', 'link': '/admin/auth/user/'},
                     {'title': 'Profiles', 'icon': 'badge', 'link': '/admin/authentication/userprofile/'},
+                    {'title': 'Newsletters', 'icon': 'mail', 'link': '/admin/authentication/newslettercampaign/'},
                     {'title': 'OTP Codes', 'icon': 'lock', 'link': '/admin/authentication/otpcode/'},
                 ],
             },

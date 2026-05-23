@@ -2,6 +2,8 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
+from .email_utils import build_branded_email_html, build_plain_email_from_html, send_smart_email
+
 
 class UserProfile(models.Model):
     ROLE_CHOICES = (('learner', 'Learner'), ('educator', 'Educator'))
@@ -33,3 +35,156 @@ class OTPCode(models.Model):
 
     def __str__(self):
         return f'{self.email} - {self.code}'
+
+
+class NewsletterCampaign(models.Model):
+    AUDIENCE_ALL = 'all'
+    AUDIENCE_LEARNERS = 'learners'
+    AUDIENCE_EDUCATORS = 'educators'
+    AUDIENCE_CHOICES = (
+        (AUDIENCE_ALL, 'Learners and educators'),
+        (AUDIENCE_LEARNERS, 'Learners only'),
+        (AUDIENCE_EDUCATORS, 'Educators only'),
+    )
+
+    STATUS_DRAFT = 'draft'
+    STATUS_SCHEDULED = 'scheduled'
+    STATUS_SENDING = 'sending'
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = (
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_SCHEDULED, 'Scheduled'),
+        (STATUS_SENDING, 'Sending'),
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+    )
+
+    title = models.CharField(max_length=150, help_text='Internal name shown only in admin.')
+    subject = models.CharField(max_length=180)
+    preheader = models.CharField(
+        max_length=180,
+        blank=True,
+        default='',
+        help_text='Short preview text some inboxes show after the subject.',
+    )
+    audience = models.CharField(max_length=16, choices=AUDIENCE_CHOICES, default=AUDIENCE_ALL)
+    header_title = models.CharField(max_length=120, default='Ed3Hub Newsletter')
+    header_subtitle = models.CharField(max_length=180, default='Updates for learners and educators')
+    body_html = models.TextField(
+        help_text='Main newsletter body. Simple HTML is allowed, for example <p>, <strong>, <ul>, and <a>.',
+    )
+    cta_text = models.CharField(max_length=80, blank=True, default='', verbose_name='Button text')
+    cta_url = models.URLField(blank=True, default='', verbose_name='Button URL')
+    footer_note = models.TextField(
+        blank=True,
+        default='You are receiving this email because you joined Ed3Hub as a learner or educator.',
+    )
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    scheduled_for = models.DateTimeField(blank=True, null=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='newsletters_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    sent_at = models.DateTimeField(blank=True, null=True)
+    total_recipients = models.PositiveIntegerField(default=0)
+    successful_sends = models.PositiveIntegerField(default=0)
+    failed_sends = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.title} ({self.get_status_display()})'
+
+    def recipient_queryset(self):
+        qs = User.objects.filter(is_active=True).exclude(email='').select_related('profile').order_by('id')
+        if self.audience == self.AUDIENCE_LEARNERS:
+            qs = qs.filter(profile__role='learner')
+        elif self.audience == self.AUDIENCE_EDUCATORS:
+            qs = qs.filter(profile__role='educator')
+        return qs
+
+    def render_html(self):
+        return build_branded_email_html(
+            subject=self.subject,
+            body_html=self.body_html,
+            preheader=self.preheader,
+            header_title=self.header_title,
+            header_subtitle=self.header_subtitle,
+            footer_note=self.footer_note,
+            cta_text=self.cta_text,
+            cta_url=self.cta_url,
+        )
+
+    def render_plain_text(self):
+        return build_plain_email_from_html(self.body_html, self.footer_note)
+
+    def send(self, *, fail_silently=True):
+        recipients = list(self.recipient_queryset().values_list('email', flat=True))
+        self.status = self.STATUS_SENDING
+        self.total_recipients = len(recipients)
+        self.successful_sends = 0
+        self.failed_sends = 0
+        self.last_error = ''
+        self.save(update_fields=[
+            'status', 'total_recipients', 'successful_sends',
+            'failed_sends', 'last_error', 'updated_at',
+        ])
+
+        html_message = self.render_html()
+        plain_message = self.render_plain_text()
+
+        for email in recipients:
+            try:
+                send_smart_email(
+                    subject=self.subject,
+                    body=plain_message,
+                    recipient_list=[email],
+                    html_message=html_message,
+                    fail_silently=False,
+                )
+                NewsletterDeliveryLog.objects.create(campaign=self, email=email, status=NewsletterDeliveryLog.STATUS_SENT)
+                self.successful_sends += 1
+            except Exception as exc:
+                NewsletterDeliveryLog.objects.create(
+                    campaign=self,
+                    email=email,
+                    status=NewsletterDeliveryLog.STATUS_FAILED,
+                    error=str(exc),
+                )
+                self.failed_sends += 1
+                self.last_error = str(exc)
+                if not fail_silently:
+                    self.status = self.STATUS_FAILED
+                    self.save(update_fields=['status', 'successful_sends', 'failed_sends', 'last_error', 'updated_at'])
+                    raise
+
+        self.status = self.STATUS_SENT if self.failed_sends == 0 else self.STATUS_FAILED
+        self.sent_at = timezone.now()
+        self.save(update_fields=[
+            'status', 'successful_sends', 'failed_sends',
+            'last_error', 'sent_at', 'updated_at',
+        ])
+        return self.successful_sends, self.failed_sends
+
+
+class NewsletterDeliveryLog(models.Model):
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = (
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+    )
+
+    campaign = models.ForeignKey(NewsletterCampaign, on_delete=models.CASCADE, related_name='delivery_logs')
+    email = models.EmailField()
+    status = models.CharField(max_length=8, choices=STATUS_CHOICES)
+    error = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.email} - {self.status}'
