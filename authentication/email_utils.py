@@ -91,11 +91,15 @@ def build_plain_email_from_html(body_html: str, footer_note: str = '') -> str:
 def send_smart_email(subject: str, body: str, recipient_list: list,
                      html_message: str = '', fail_silently: bool = False) -> bool:
     """
-    Send email via SendGrid API. Falls back to SMTP if SENDGRID_API_KEY is not set.
+    Send email via SMTP when EMAIL_USE_SMTP is enabled; otherwise use SendGrid
+    when configured and fall back to SMTP.
     """
     api_key = getattr(settings, 'SENDGRID_API_KEY', None)
+    use_smtp = getattr(settings, 'EMAIL_USE_SMTP', False)
 
-    if api_key:
+    if use_smtp:
+        return _send_via_smtp(subject, body, recipient_list, html_message, fail_silently)
+    elif api_key:
         return _send_via_sendgrid(api_key, subject, body, recipient_list, html_message, fail_silently)
     else:
         return _send_via_smtp(subject, body, recipient_list, html_message, fail_silently)
@@ -158,11 +162,18 @@ def _send_via_smtp(subject: str, body: str, recipient_list: list,
     from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', username)
     timeout = getattr(settings, 'EMAIL_TIMEOUT', 10)
 
-    CONFIGS = [
+    configured_port = getattr(settings, 'EMAIL_PORT', 587)
+    configured_use_ssl = getattr(settings, 'EMAIL_USE_SSL', False)
+    configured_use_tls = getattr(settings, 'EMAIL_USE_TLS', True)
+    configs = [
+        {'port': configured_port, 'use_ssl': configured_use_ssl, 'use_tls': configured_use_tls},
         {'port': 587,  'use_ssl': False, 'use_tls': True},
         {'port': 465,  'use_ssl': True,  'use_tls': False},
         {'port': 2525, 'use_ssl': False, 'use_tls': True},
     ]
+    seen = set()
+    configs = [cfg for cfg in configs if not ((cfg['port'], cfg['use_ssl'], cfg['use_tls']) in seen or seen.add((cfg['port'], cfg['use_ssl'], cfg['use_tls'])))]
+    errors = []
 
     def port_open(port):
         try:
@@ -174,8 +185,9 @@ def _send_via_smtp(subject: str, body: str, recipient_list: list,
         except Exception:
             return False
 
-    for cfg in CONFIGS:
+    for cfg in configs:
         if not port_open(cfg['port']):
+            errors.append(f'port {cfg["port"]}: connection failed')
             continue
         try:
             if cfg['use_ssl']:
@@ -209,9 +221,12 @@ def _send_via_smtp(subject: str, body: str, recipient_list: list,
             logger.info(f'SMTP port {cfg["port"]}: email sent to {recipient_list}')
             return True
         except Exception as e:
-            logger.warning(f'SMTP port {cfg["port"]} failed: {e}')
+            error = f'port {cfg["port"]}: {e}'
+            errors.append(error)
+            logger.warning(f'SMTP {error}')
 
-    msg = f'All email methods failed for recipients: {recipient_list}'
+    detail = '; '.join(errors) if errors else 'no SMTP configs attempted'
+    msg = f'All SMTP methods failed for recipients: {recipient_list}. {detail}'
     logger.error(msg)
     if fail_silently:
         return False
