@@ -2,9 +2,14 @@ from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.shortcuts import redirect, render
+from django.urls import path, reverse
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline
-from .models import NewsletterCampaign, NewsletterDeliveryLog, UserProfile, OTPCode
+
+from .forms import NewsletterContactCSVImportForm
+from .models import NewsletterCampaign, NewsletterContact, NewsletterDeliveryLog, UserProfile, OTPCode
+from .newsletter_import import import_newsletter_contacts
 
 admin.site.unregister(User)
 
@@ -43,6 +48,72 @@ class NewsletterDeliveryLogInline(TabularInline):
 
     def has_add_permission(self, request, obj=None):
         return False
+
+
+@admin.register(NewsletterContact)
+class NewsletterContactAdmin(ModelAdmin):
+    change_list_template = 'admin/authentication/newslettercontact/change_list.html'
+    list_display = ('email', 'first_name', 'last_name', 'source', 'is_subscribed', 'created_at')
+    list_filter = ('is_subscribed', 'source', 'created_at')
+    search_fields = ('email', 'first_name', 'last_name', 'source')
+    readonly_fields = ('created_at', 'updated_at', 'imported_by')
+    actions = ('mark_subscribed', 'mark_unsubscribed')
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                'import-csv/',
+                self.admin_site.admin_view(self.import_csv_view),
+                name='authentication_newslettercontact_import_csv',
+            ),
+        ]
+        return custom_urls + urls
+
+    def import_csv_view(self, request):
+        if request.method == 'POST':
+            form = NewsletterContactCSVImportForm(request.POST, request.FILES)
+            if form.is_valid():
+                uploaded_file = form.cleaned_data['csv_file']
+                decoded_file = uploaded_file.read().decode('utf-8-sig').splitlines()
+                result = import_newsletter_contacts(
+                    decoded_file,
+                    source=form.cleaned_data.get('source') or 'csv-import',
+                    imported_by=request.user,
+                    update_existing=form.cleaned_data['update_existing'],
+                )
+                if result.errors:
+                    messages.warning(
+                        request,
+                        f'Import completed with warnings. Created: {result.created}. Updated: {result.updated}. '
+                        f'Skipped: {result.skipped}. First issue: {result.errors[0]}',
+                    )
+                else:
+                    messages.success(
+                        request,
+                        f'Import completed. Created: {result.created}. Updated: {result.updated}. Skipped: {result.skipped}.',
+                    )
+                return redirect(reverse('admin:authentication_newslettercontact_changelist'))
+        else:
+            form = NewsletterContactCSVImportForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            'title': 'Import newsletter contacts',
+            'form': form,
+            'opts': self.model._meta,
+        }
+        return render(request, 'admin/authentication/newslettercontact/import_csv.html', context)
+
+    @admin.action(description='Mark selected contacts as subscribed')
+    def mark_subscribed(self, request, queryset):
+        updated = queryset.update(is_subscribed=True)
+        self.message_user(request, f'{updated} contact(s) marked as subscribed.', messages.SUCCESS)
+
+    @admin.action(description='Mark selected contacts as unsubscribed')
+    def mark_unsubscribed(self, request, queryset):
+        updated = queryset.update(is_subscribed=False)
+        self.message_user(request, f'{updated} contact(s) marked as unsubscribed.', messages.SUCCESS)
 
 
 @admin.register(NewsletterCampaign)
@@ -86,7 +157,7 @@ class NewsletterCampaignAdmin(ModelAdmin):
     def recipient_count(self, obj):
         if not obj.pk:
             return 'Save first to calculate recipients.'
-        return obj.recipient_queryset().count()
+        return len(obj.recipient_emails())
     recipient_count.short_description = 'Matching recipients'
 
     def email_preview(self, obj):
