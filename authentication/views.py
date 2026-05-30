@@ -13,7 +13,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 
 from .models import OTPCode, UserProfile
 from .serializers import RegisterSerializer, UserSerializer, EducatorSerializer, GoogleAuthSerializer, ForgotPasswordSerializer, VerifyResetOTPSerializer, ResetPasswordSerializer
-from .utils import create_and_send_otp, create_and_send_reset_otp
+from .utils import create_and_send_otp, create_and_send_reset_otp, send_welcome_email
 
 
 def get_tokens_for_user(user):
@@ -100,6 +100,8 @@ class VerifyOTPView(APIView):
         user.is_active = True
         user.save()
         otp.delete()
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        send_welcome_email(user, profile.role)
 
         return Response({'detail': 'Email verified successfully. Please sign in.'}, status=status.HTTP_200_OK)
 
@@ -246,6 +248,7 @@ class GoogleAuthView(APIView):
                 counter += 1
             user = User.objects.create_user(username=username, email=email, first_name=name, is_active=True)
             UserProfile.objects.create(user=user, role=role)
+            send_welcome_email(user, role)
             is_new_user = True
 
         return Response(
