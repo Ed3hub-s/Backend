@@ -37,14 +37,40 @@ class OTPCode(models.Model):
         return f'{self.email} - {self.code}'
 
 
+class NewsletterContact(models.Model):
+    email = models.EmailField(unique=True)
+    first_name = models.CharField(max_length=80, blank=True, default='')
+    last_name = models.CharField(max_length=80, blank=True, default='')
+    source = models.CharField(max_length=120, blank=True, default='csv-import')
+    is_subscribed = models.BooleanField(default=True)
+    imported_by = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='newsletter_contacts_imported')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('email',)
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.email
+
+
 class NewsletterCampaign(models.Model):
     AUDIENCE_ALL = 'all'
     AUDIENCE_LEARNERS = 'learners'
     AUDIENCE_EDUCATORS = 'educators'
+    AUDIENCE_IMPORTED = 'imported'
+    AUDIENCE_EVERYONE = 'everyone'
     AUDIENCE_CHOICES = (
-        (AUDIENCE_ALL, 'Learners and educators'),
+        (AUDIENCE_ALL, 'Platform users'),
         (AUDIENCE_LEARNERS, 'Learners only'),
         (AUDIENCE_EDUCATORS, 'Educators only'),
+        (AUDIENCE_IMPORTED, 'Imported contacts only'),
+        (AUDIENCE_EVERYONE, 'Platform users and imported contacts'),
     )
 
     STATUS_DRAFT = 'draft'
@@ -105,6 +131,26 @@ class NewsletterCampaign(models.Model):
             qs = qs.filter(profile__role='educator')
         return qs
 
+    def imported_contact_queryset(self):
+        if self.audience not in (self.AUDIENCE_IMPORTED, self.AUDIENCE_EVERYONE):
+            return NewsletterContact.objects.none()
+        return NewsletterContact.objects.filter(is_subscribed=True).exclude(email='').order_by('email')
+
+    def recipient_emails(self):
+        emails = []
+        if self.audience != self.AUDIENCE_IMPORTED:
+            emails.extend(self.recipient_queryset().values_list('email', flat=True))
+        emails.extend(self.imported_contact_queryset().values_list('email', flat=True))
+
+        seen = set()
+        unique_emails = []
+        for email in emails:
+            normalized_email = (email or '').strip().lower()
+            if normalized_email and normalized_email not in seen:
+                seen.add(normalized_email)
+                unique_emails.append(normalized_email)
+        return unique_emails
+
     def render_html(self):
         return build_branded_email_html(
             subject=self.subject,
@@ -121,7 +167,7 @@ class NewsletterCampaign(models.Model):
         return build_plain_email_from_html(self.body_html, self.footer_note)
 
     def send(self, *, fail_silently=True):
-        recipients = list(self.recipient_queryset().values_list('email', flat=True))
+        recipients = self.recipient_emails()
         self.status = self.STATUS_SENDING
         self.total_recipients = len(recipients)
         self.successful_sends = 0
