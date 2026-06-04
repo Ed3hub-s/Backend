@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 import json
 import re
 
+from authentication.utils import credit_first_purchase_commission
 from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
@@ -719,6 +720,7 @@ class EnrollView(APIView):
                     description=f'60% share from {request.user.username} enrolling in "{course.title}"',
                     course=course,
                 )
+            credit_first_purchase_commission(request.user, course)
 
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
 

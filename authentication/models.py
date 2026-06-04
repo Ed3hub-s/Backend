@@ -1,3 +1,6 @@
+import secrets
+
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
@@ -6,7 +9,7 @@ from .email_utils import build_branded_email_html, build_plain_email_from_html, 
 
 
 class UserProfile(models.Model):
-    ROLE_CHOICES = (('learner', 'Learner'), ('educator', 'Educator'))
+    ROLE_CHOICES = (('learner', 'Learner'), ('educator', 'Educator'), ('marketer', 'Marketer'))
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='learner')
     bio = models.TextField(blank=True, default='')
@@ -22,6 +25,12 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f'{self.user.username} - {self.role}'
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.role == 'marketer':
+            AffiliateMarketer.objects.get_or_create(user=self.user)
+            MarketerWallet.objects.get_or_create(marketer=self.user)
 
 
 class OTPCode(models.Model):
@@ -234,3 +243,99 @@ class NewsletterDeliveryLog(models.Model):
 
     def __str__(self):
         return f'{self.email} - {self.status}'
+
+
+class AffiliateMarketer(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='affiliate_marketer')
+    referral_code = models.CharField(max_length=16, unique=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='affiliate_marketers_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def save(self, *args, **kwargs):
+        if not self.referral_code:
+            self.referral_code = self.generate_referral_code()
+        super().save(*args, **kwargs)
+
+    @staticmethod
+    def generate_referral_code():
+        while True:
+            code = secrets.token_urlsafe(6).replace('-', '').replace('_', '').upper()[:10]
+            if code and not AffiliateMarketer.objects.filter(referral_code=code).exists():
+                return code
+
+    @property
+    def affiliate_link(self):
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'https://ed3hub.com').rstrip('/')
+        return f'{frontend_url}/sign-up?ref={self.referral_code}'
+
+    def __str__(self):
+        return f'{self.user.username} - {self.referral_code}'
+
+
+class MarketerWallet(models.Model):
+    marketer = models.OneToOneField(User, on_delete=models.CASCADE, related_name='marketer_wallet')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_earned = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    total_withdrawn = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.marketer.username} - ₦{self.balance}'
+
+
+class AffiliateReferral(models.Model):
+    marketer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='affiliate_referrals')
+    referred_user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='affiliate_referral')
+    referral_code = models.CharField(max_length=16)
+    signup_bonus_paid = models.BooleanField(default=False)
+    first_purchase_reward_paid = models.BooleanField(default=False)
+    first_purchase_course = models.ForeignKey(
+        'courses.Course',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='affiliate_first_purchase_referrals',
+    )
+    first_purchase_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    first_purchase_commission = models.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+    created_at = models.DateTimeField(auto_now_add=True)
+    first_purchase_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.referred_user.username} via {self.marketer.username}'
+
+
+class MarketerTransaction(models.Model):
+    TYPE_CHOICES = (
+        ('signup_bonus', 'Signup Bonus'),
+        ('purchase_commission', 'Purchase Commission'),
+        ('withdrawal', 'Withdrawal'),
+    )
+
+    wallet = models.ForeignKey(MarketerWallet, on_delete=models.CASCADE, related_name='transactions')
+    referral = models.ForeignKey(AffiliateReferral, on_delete=models.SET_NULL, blank=True, null=True, related_name='transactions')
+    referred_user = models.ForeignKey(User, on_delete=models.SET_NULL, blank=True, null=True, related_name='marketer_transactions_from_signup')
+    course = models.ForeignKey('courses.Course', on_delete=models.SET_NULL, blank=True, null=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    transaction_type = models.CharField(max_length=24, choices=TYPE_CHOICES)
+    description = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-created_at',)
+
+    def __str__(self):
+        return f'{self.wallet.marketer.username} {self.transaction_type} ₦{self.amount}'

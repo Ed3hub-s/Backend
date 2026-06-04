@@ -4,7 +4,7 @@ from .views import (
     RegisterView, LoginView, LogoutView, MeView, GoogleAuthView,
     VerifyOTPView, ResendOTPView, UpdateProfileView,
     ForgotPasswordView, VerifyResetOTPView, ResetPasswordView,
-    EducatorsListView,
+    EducatorsListView, MarketerDashboardView,
 )
 
 urlpatterns = [
@@ -21,4 +21,5 @@ urlpatterns = [
     path('verify-reset-otp/', VerifyResetOTPView.as_view(), name='verify-reset-otp'),
     path('reset-password/', ResetPasswordView.as_view(), name='reset-password'),
     path('educators/', EducatorsListView.as_view(), name='educators'),
+    path('marketer/dashboard/', MarketerDashboardView.as_view(), name='marketer-dashboard'),
 ]
