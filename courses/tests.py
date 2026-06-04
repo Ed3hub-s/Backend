@@ -1,9 +1,12 @@
 import json
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from authentication.models import AffiliateMarketer, AffiliateReferral, MarketerWallet, UserProfile
+from authentication.utils import credit_verified_referral_signup
 from .models import (
     Assessment,
     Choice,
@@ -202,3 +205,47 @@ class CourseUpdateSyncTests(TestCase):
         self.assertEqual(first_module.lessons.get().title, 'First Lesson')
         self.assertEqual(first_module.quiz.questions.get().text, 'First quiz?')
         self.assertEqual(first_module.assessments.get().title, 'First assessment')
+
+
+class AffiliateCommissionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = User.objects.create_user(username='teacher', password='pass')
+        self.marketer = User.objects.create_user(username='marketer', password='pass', is_active=True)
+        UserProfile.objects.create(user=self.marketer, role='marketer')
+        self.learner = User.objects.create_user(username='buyer', email='buyer@example.com', password='pass', is_active=True)
+        self.course = Course.objects.create(
+            instructor=self.instructor,
+            title='Paid Course',
+            slug='paid-course',
+            description='Paid description',
+            price=Decimal('100.00'),
+            is_free=False,
+            is_published=True,
+        )
+
+    def test_first_paid_enrollment_credits_marketer_once(self):
+        affiliate = AffiliateMarketer.objects.get(user=self.marketer)
+        referral = AffiliateReferral.objects.create(
+            marketer=self.marketer,
+            referred_user=self.learner,
+            referral_code=affiliate.referral_code,
+        )
+        credit_verified_referral_signup(self.learner)
+
+        self.client.force_authenticate(self.learner)
+        response = self.client.post(f'/api/courses/{self.course.id}/enroll/')
+        self.assertEqual(response.status_code, 201)
+
+        referral.refresh_from_db()
+        wallet = MarketerWallet.objects.get(marketer=self.marketer)
+        self.assertTrue(referral.signup_bonus_paid)
+        self.assertTrue(referral.first_purchase_reward_paid)
+        self.assertEqual(wallet.balance, Decimal('25.00'))
+        self.assertEqual(wallet.transactions.count(), 2)
+
+        duplicate_response = self.client.post(f'/api/courses/{self.course.id}/enroll/')
+        self.assertEqual(duplicate_response.status_code, 200)
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal('25.00'))
+        self.assertEqual(wallet.transactions.count(), 2)

@@ -8,7 +8,17 @@ from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline
 
 from .forms import NewsletterContactCSVImportForm
-from .models import NewsletterCampaign, NewsletterContact, NewsletterDeliveryLog, UserProfile, OTPCode
+from .models import (
+    AffiliateMarketer,
+    AffiliateReferral,
+    MarketerTransaction,
+    MarketerWallet,
+    NewsletterCampaign,
+    NewsletterContact,
+    NewsletterDeliveryLog,
+    OTPCode,
+    UserProfile,
+)
 from .newsletter_import import import_newsletter_contacts
 
 admin.site.unregister(User)
@@ -30,6 +40,84 @@ class UserProfileAdmin(ModelAdmin):
     list_display = ('user', 'role', 'bio')
     list_filter = ('role',)
     search_fields = ('user__username', 'user__email')
+
+
+class MarketerTransactionInline(TabularInline):
+    model = MarketerTransaction
+    extra = 0
+    can_delete = False
+    readonly_fields = ('referral', 'referred_user', 'course', 'amount', 'transaction_type', 'description', 'created_at')
+    fields = readonly_fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AffiliateMarketer)
+class AffiliateMarketerAdmin(ModelAdmin):
+    list_display = ('user', 'referral_code', 'is_active', 'affiliate_link_display', 'created_by', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('user__username', 'user__email', 'referral_code')
+    readonly_fields = ('referral_code', 'affiliate_link_display', 'created_by', 'created_at')
+
+    def has_add_permission(self, request):
+        return request.user.is_superuser
+
+    def has_change_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def has_delete_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by_id:
+            obj.created_by = request.user
+        if obj.scheduled_for and obj.status == NewsletterCampaign.STATUS_DRAFT:
+            obj.status = NewsletterCampaign.STATUS_SCHEDULED
+        super().save_model(request, obj, form, change)
+        profile, _ = UserProfile.objects.get_or_create(user=obj.user)
+        if profile.role != 'marketer':
+            profile.role = 'marketer'
+            profile.save(update_fields=['role'])
+
+    def affiliate_link_display(self, obj):
+        if not obj.pk:
+            return 'Save first to generate link.'
+        return obj.affiliate_link
+    affiliate_link_display.short_description = 'Affiliate link'
+
+
+@admin.register(MarketerWallet)
+class MarketerWalletAdmin(ModelAdmin):
+    list_display = ('marketer', 'balance', 'total_earned', 'total_withdrawn', 'updated_at')
+    search_fields = ('marketer__username', 'marketer__email')
+    readonly_fields = ('balance', 'total_earned', 'total_withdrawn', 'updated_at')
+    inlines = [MarketerTransactionInline]
+
+
+@admin.register(AffiliateReferral)
+class AffiliateReferralAdmin(ModelAdmin):
+    list_display = (
+        'referred_user', 'marketer', 'signup_bonus_paid',
+        'first_purchase_reward_paid', 'first_purchase_course',
+        'first_purchase_commission', 'created_at',
+    )
+    list_filter = ('signup_bonus_paid', 'first_purchase_reward_paid', 'created_at')
+    search_fields = ('marketer__username', 'referred_user__username', 'referred_user__email', 'referral_code')
+    readonly_fields = (
+        'marketer', 'referred_user', 'referral_code', 'signup_bonus_paid',
+        'first_purchase_reward_paid', 'first_purchase_course',
+        'first_purchase_amount', 'first_purchase_commission',
+        'created_at', 'first_purchase_at',
+    )
+
+
+@admin.register(MarketerTransaction)
+class MarketerTransactionAdmin(ModelAdmin):
+    list_display = ('wallet', 'transaction_type', 'amount', 'referred_user', 'course', 'created_at')
+    list_filter = ('transaction_type', 'created_at')
+    search_fields = ('wallet__marketer__username', 'referred_user__username', 'course__title', 'description')
+    readonly_fields = ('wallet', 'referral', 'referred_user', 'course', 'amount', 'transaction_type', 'description', 'created_at')
 
 
 @admin.register(OTPCode)

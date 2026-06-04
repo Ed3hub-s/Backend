@@ -11,9 +11,15 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
-from .models import OTPCode, UserProfile
+from .models import AffiliateMarketer, AffiliateReferral, MarketerWallet, OTPCode, UserProfile
 from .serializers import RegisterSerializer, UserSerializer, EducatorSerializer, GoogleAuthSerializer, ForgotPasswordSerializer, VerifyResetOTPSerializer, ResetPasswordSerializer
-from .utils import create_and_send_otp, create_and_send_reset_otp, send_welcome_email
+from .utils import (
+    create_affiliate_referral,
+    create_and_send_otp,
+    create_and_send_reset_otp,
+    credit_verified_referral_signup,
+    send_welcome_email,
+)
 
 
 def get_tokens_for_user(user):
@@ -64,6 +70,7 @@ class RegisterView(APIView):
 
         user = User.objects.create_user(username=username, email=email, password=password, is_active=False)
         UserProfile.objects.create(user=user, role=role)
+        create_affiliate_referral(user, request.data.get('referral_code') or request.data.get('ref'))
         try:
             create_and_send_otp(email)
         except Exception:
@@ -101,6 +108,7 @@ class VerifyOTPView(APIView):
         user.save()
         otp.delete()
         profile, _ = UserProfile.objects.get_or_create(user=user)
+        credit_verified_referral_signup(user)
         send_welcome_email(user, profile.role)
 
         return Response({'detail': 'Email verified successfully. Please sign in.'}, status=status.HTTP_200_OK)
@@ -248,6 +256,8 @@ class GoogleAuthView(APIView):
                 counter += 1
             user = User.objects.create_user(username=username, email=email, first_name=name, is_active=True)
             UserProfile.objects.create(user=user, role=role)
+            create_affiliate_referral(user, request.data.get('referral_code') or request.data.get('ref'))
+            credit_verified_referral_signup(user)
             send_welcome_email(user, role)
             is_new_user = True
 
@@ -335,3 +345,65 @@ class ResetPasswordView(APIView):
         user.set_password(new_password)
         user.save()
         return Response({'detail': 'Password reset successfully.'}, status=status.HTTP_200_OK)
+
+
+class MarketerDashboardView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        if not hasattr(request.user, 'profile') or request.user.profile.role != 'marketer':
+            return Response({'detail': 'Only marketers have access to this dashboard.'}, status=status.HTTP_403_FORBIDDEN)
+
+        affiliate, _ = AffiliateMarketer.objects.get_or_create(user=request.user)
+        wallet, _ = MarketerWallet.objects.get_or_create(marketer=request.user)
+        referrals = (
+            AffiliateReferral.objects
+            .filter(marketer=request.user)
+            .select_related('referred_user', 'first_purchase_course')
+            .order_by('-created_at')
+        )
+        transactions = (
+            wallet.transactions
+            .select_related('referred_user', 'course')
+            .all()[:30]
+        )
+
+        return Response({
+            'referral_code': affiliate.referral_code,
+            'affiliate_link': affiliate.affiliate_link,
+            'balance': str(wallet.balance),
+            'total_earned': str(wallet.total_earned),
+            'total_withdrawn': str(wallet.total_withdrawn),
+            'signup_reward': '5.00',
+            'first_purchase_commission_rate': '20%',
+            'total_referred_users': referrals.count(),
+            'paid_referred_users': referrals.filter(first_purchase_reward_paid=True).count(),
+            'pending_referred_users': referrals.filter(first_purchase_reward_paid=False).count(),
+            'referrals': [
+                {
+                    'id': referral.id,
+                    'username': referral.referred_user.username,
+                    'email': referral.referred_user.email,
+                    'joined_at': referral.created_at,
+                    'signup_bonus_paid': referral.signup_bonus_paid,
+                    'has_paid': referral.first_purchase_reward_paid,
+                    'first_purchase_course': referral.first_purchase_course.title if referral.first_purchase_course else None,
+                    'first_purchase_amount': str(referral.first_purchase_amount),
+                    'first_purchase_commission': str(referral.first_purchase_commission),
+                    'first_purchase_at': referral.first_purchase_at,
+                }
+                for referral in referrals[:50]
+            ],
+            'transactions': [
+                {
+                    'id': tx.id,
+                    'amount': str(tx.amount),
+                    'type': tx.transaction_type,
+                    'description': tx.description,
+                    'referred_user': tx.referred_user.username if tx.referred_user else None,
+                    'course': tx.course.title if tx.course else None,
+                    'created_at': tx.created_at,
+                }
+                for tx in transactions
+            ],
+        })

@@ -216,6 +216,9 @@ UNFOLD = {
                 'items': [
                     {'title': 'Users', 'icon': 'person', 'link': '/admin/auth/user/'},
                     {'title': 'Profiles', 'icon': 'badge', 'link': '/admin/authentication/userprofile/'},
+                    {'title': 'Marketers', 'icon': 'campaign', 'link': '/admin/authentication/affiliatemarketer/'},
+                    {'title': 'Referrals', 'icon': 'group_add', 'link': '/admin/authentication/affiliatereferral/'},
+                    {'title': 'Marketer Wallets', 'icon': 'payments', 'link': '/admin/authentication/marketerwallet/'},
                     {'title': 'Newsletters', 'icon': 'mail', 'link': '/admin/authentication/newslettercampaign/'},
                     {'title': 'OTP Codes', 'icon': 'lock', 'link': '/admin/authentication/otpcode/'},
                 ],

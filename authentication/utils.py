@@ -1,15 +1,26 @@
 import logging
 import random
+from decimal import Decimal, InvalidOperation
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.utils.html import escape
 from django.utils import timezone
 
-from .models import OTPCode
+from .models import (
+    AffiliateMarketer,
+    AffiliateReferral,
+    MarketerTransaction,
+    MarketerWallet,
+    OTPCode,
+)
 from .email_utils import build_branded_email_html, build_plain_email_from_html, send_smart_email
 
 logger = logging.getLogger(__name__)
+
+MARKETER_SIGNUP_BONUS = Decimal('5.00')
+MARKETER_FIRST_PURCHASE_COMMISSION_RATE = Decimal('0.20')
 
 OTP_HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -180,3 +191,110 @@ def send_welcome_email(user, role: str | None = None, fail_silently: bool = True
         if fail_silently:
             return False
         raise
+
+
+def get_affiliate_marketer_by_code(referral_code):
+    referral_code = (referral_code or '').strip()
+    if not referral_code:
+        return None
+    return (
+        AffiliateMarketer.objects
+        .select_related('user')
+        .filter(referral_code__iexact=referral_code, is_active=True, user__is_active=True)
+        .first()
+    )
+
+
+def create_affiliate_referral(referred_user, referral_code):
+    affiliate = get_affiliate_marketer_by_code(referral_code)
+    if not affiliate or affiliate.user_id == referred_user.id:
+        return None
+
+    referral, _ = AffiliateReferral.objects.get_or_create(
+        referred_user=referred_user,
+        defaults={
+            'marketer': affiliate.user,
+            'referral_code': affiliate.referral_code,
+        },
+    )
+    return referral
+
+
+def credit_verified_referral_signup(user):
+    try:
+        referral = AffiliateReferral.objects.select_related('marketer', 'referred_user').get(referred_user=user)
+    except AffiliateReferral.DoesNotExist:
+        return None
+
+    with transaction.atomic():
+        referral = AffiliateReferral.objects.select_for_update().get(id=referral.id)
+        if referral.signup_bonus_paid:
+            return referral
+
+        wallet, _ = MarketerWallet.objects.select_for_update().get_or_create(marketer=referral.marketer)
+        wallet.balance = Decimal(str(wallet.balance)) + MARKETER_SIGNUP_BONUS
+        wallet.total_earned = Decimal(str(wallet.total_earned)) + MARKETER_SIGNUP_BONUS
+        wallet.save(update_fields=['balance', 'total_earned', 'updated_at'])
+
+        MarketerTransaction.objects.create(
+            wallet=wallet,
+            referral=referral,
+            referred_user=referral.referred_user,
+            amount=MARKETER_SIGNUP_BONUS,
+            transaction_type='signup_bonus',
+            description=f'Signup bonus for referring {referral.referred_user.username}',
+        )
+        referral.signup_bonus_paid = True
+        referral.save(update_fields=['signup_bonus_paid'])
+        return referral
+
+
+def credit_first_purchase_commission(user, course):
+    if not course or course.is_free:
+        return None
+
+    try:
+        price = Decimal(str(course.price)).quantize(Decimal('0.01'))
+    except (InvalidOperation, TypeError):
+        return None
+    if price <= 0:
+        return None
+
+    try:
+        referral = AffiliateReferral.objects.select_related('marketer', 'referred_user').get(referred_user=user)
+    except AffiliateReferral.DoesNotExist:
+        return None
+
+    with transaction.atomic():
+        referral = AffiliateReferral.objects.select_for_update().get(id=referral.id)
+        if referral.first_purchase_reward_paid:
+            return referral
+
+        commission = (price * MARKETER_FIRST_PURCHASE_COMMISSION_RATE).quantize(Decimal('0.01'))
+        wallet, _ = MarketerWallet.objects.select_for_update().get_or_create(marketer=referral.marketer)
+        wallet.balance = Decimal(str(wallet.balance)) + commission
+        wallet.total_earned = Decimal(str(wallet.total_earned)) + commission
+        wallet.save(update_fields=['balance', 'total_earned', 'updated_at'])
+
+        MarketerTransaction.objects.create(
+            wallet=wallet,
+            referral=referral,
+            referred_user=referral.referred_user,
+            course=course,
+            amount=commission,
+            transaction_type='purchase_commission',
+            description=f'20% first purchase commission from {referral.referred_user.username} buying "{course.title}"',
+        )
+        referral.first_purchase_reward_paid = True
+        referral.first_purchase_course = course
+        referral.first_purchase_amount = price
+        referral.first_purchase_commission = commission
+        referral.first_purchase_at = timezone.now()
+        referral.save(update_fields=[
+            'first_purchase_reward_paid',
+            'first_purchase_course',
+            'first_purchase_amount',
+            'first_purchase_commission',
+            'first_purchase_at',
+        ])
+        return referral
