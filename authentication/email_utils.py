@@ -90,66 +90,13 @@ def build_plain_email_from_html(body_html: str, footer_note: str = '') -> str:
 
 def send_smart_email(subject: str, body: str, recipient_list: list,
                      html_message: str = '', fail_silently: bool = False) -> bool:
-    """
-    Send email via SMTP when EMAIL_USE_SMTP is enabled; otherwise use SendGrid
-    when configured and fall back to SMTP.
-    """
-    api_key = getattr(settings, 'SENDGRID_API_KEY', None)
-    use_smtp = getattr(settings, 'EMAIL_USE_SMTP', False)
-
-    if use_smtp:
-        return _send_via_smtp(subject, body, recipient_list, html_message, fail_silently)
-    elif api_key:
-        return _send_via_sendgrid(api_key, subject, body, recipient_list, html_message, fail_silently)
-    else:
-        return _send_via_smtp(subject, body, recipient_list, html_message, fail_silently)
-
-
-def _send_via_sendgrid(api_key: str, subject: str, body: str, recipient_list: list,
-                       html_message: str, fail_silently: bool) -> bool:
-    try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail, To, Content
-
-        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@ed3hub.com')
-
-        message = Mail(
-            from_email=from_email,
-            to_emails=[To(r) for r in recipient_list],
-            subject=subject,
-        )
-
-        if html_message:
-            message.content = [
-                Content('text/plain', body or ' '),
-                Content('text/html', html_message),
-            ]
-        else:
-            message.content = [Content('text/plain', body or ' ')]
-
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
-
-        if response.status_code in (200, 202):
-            logger.info(f'SendGrid: email sent to {recipient_list} (status {response.status_code})')
-            return True
-        else:
-            msg = f'SendGrid returned status {response.status_code}: {response.body}'
-            logger.error(msg)
-            if fail_silently:
-                return False
-            raise ConnectionError(msg)
-
-    except Exception as e:
-        logger.error(f'SendGrid failed: {e}')
-        if fail_silently:
-            return False
-        raise
+    """Send email via the configured SMTP server."""
+    return _send_via_smtp(subject, body, recipient_list, html_message, fail_silently)
 
 
 def _send_via_smtp(subject: str, body: str, recipient_list: list,
                    html_message: str, fail_silently: bool) -> bool:
-    """SMTP fallback with auto port detection."""
+    """SMTP sender with auto port detection."""
     import socket
     import smtplib
     import ssl

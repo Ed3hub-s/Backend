@@ -72,8 +72,6 @@ class AffiliateMarketerAdmin(ModelAdmin):
     def save_model(self, request, obj, form, change):
         if not obj.created_by_id:
             obj.created_by = request.user
-        if obj.scheduled_for and obj.status == NewsletterCampaign.STATUS_DRAFT:
-            obj.status = NewsletterCampaign.STATUS_SCHEDULED
         super().save_model(request, obj, form, change)
         profile, _ = UserProfile.objects.get_or_create(user=obj.user)
         if profile.role != 'marketer':

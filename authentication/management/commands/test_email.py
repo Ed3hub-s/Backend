@@ -4,25 +4,16 @@ from authentication.email_utils import send_smart_email
 
 
 class Command(BaseCommand):
-    help = 'Test email sending (SendGrid or SMTP auto-detection)'
+    help = 'Test SMTP email sending'
 
     def add_arguments(self, parser):
         parser.add_argument('recipient', type=str)
 
     def handle(self, *args, **kwargs):
         recipient = kwargs['recipient']
-        api_key = getattr(settings, 'SENDGRID_API_KEY', '')
-        use_smtp = getattr(settings, 'EMAIL_USE_SMTP', False)
 
-        if use_smtp:
-            self.stdout.write('Method: SMTP')
-            self.stdout.write(f'Host:   {settings.EMAIL_HOST}:{settings.EMAIL_PORT}')
-        elif api_key and api_key != 'your-sendgrid-api-key-here':
-            self.stdout.write('Method: SendGrid API')
-        else:
-            self.stdout.write('Method: SMTP auto-detection (no SendGrid key set)')
-            self.stdout.write(f'Host:   {settings.EMAIL_HOST}')
-
+        self.stdout.write('Method: SMTP')
+        self.stdout.write(f'Host:   {settings.EMAIL_HOST}:{settings.EMAIL_PORT}')
         self.stdout.write(f'From:   {settings.DEFAULT_FROM_EMAIL}')
         self.stdout.write(f'To:     {recipient}\n')
 

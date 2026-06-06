@@ -318,8 +318,6 @@ SOCIALACCOUNT_PROVIDERS = {
 ACCOUNT_EMAIL_VERIFICATION = 'none'
 
 # Email
-SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
-EMAIL_USE_SMTP = os.getenv('EMAIL_USE_SMTP', 'False').lower() in ('1', 'true', 'yes', 'on')
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'das121.truehost.cloud')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
