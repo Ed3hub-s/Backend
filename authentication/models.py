@@ -275,7 +275,7 @@ class AffiliateMarketer(models.Model):
 
     @property
     def affiliate_link(self):
-        frontend_url = getattr(settings, 'FRONTEND_URL', 'https://ed3hub.com').rstrip('/')
+        frontend_url = getattr(settings, 'AFFILIATE_FRONTEND_URL', 'https://ed3hub.com').rstrip('/')
         return f'{frontend_url}/sign-up?ref={self.referral_code}'
 
     def __str__(self):
