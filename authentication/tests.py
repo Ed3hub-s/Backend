@@ -6,7 +6,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import OTPCode, UserProfile
+from .models import AffiliateMarketer, AffiliateReferral, OTPCode, UserProfile
 
 
 class WelcomeEmailTests(TestCase):
@@ -62,3 +62,43 @@ class WelcomeEmailTests(TestCase):
         self.assertEqual(kwargs['recipient_list'], ['creator@example.com'])
         self.assertIn('you just joined Ed3hub as a course creator', kwargs['html_message'])
         self.assertIn('/dashboard', kwargs['html_message'])
+
+
+class AffiliateSignupFlowTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.marketer = User.objects.create_user(
+            username='marketer',
+            email='marketer@example.com',
+            password='StrongPass123',
+            is_active=True,
+        )
+        UserProfile.objects.create(user=self.marketer, role='marketer')
+        self.affiliate = AffiliateMarketer.objects.get(user=self.marketer)
+
+    @patch('authentication.views.create_and_send_otp')
+    def test_referred_signup_is_listed_on_marketer_dashboard(self, send_otp):
+        response = self.client.post(
+            '/api/auth/register/',
+            {
+                'username': 'referred',
+                'email': 'referred@example.com',
+                'password': 'StrongPass123',
+                'role': 'learner',
+                'referral_code': self.affiliate.referral_code,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        referral = AffiliateReferral.objects.get(referred_user__username='referred')
+        self.assertEqual(referral.marketer, self.marketer)
+        self.assertEqual(referral.referral_code, self.affiliate.referral_code)
+
+        self.client.force_authenticate(self.marketer)
+        dashboard = self.client.get('/api/auth/marketer/dashboard/')
+
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(dashboard.data['total_referred_users'], 1)
+        self.assertEqual(dashboard.data['referrals'][0]['username'], 'referred')
+        self.assertFalse(dashboard.data['referrals'][0]['signup_bonus_paid'])
