@@ -91,8 +91,9 @@ CHANNEL_LAYERS = {
 }
 
 # Celery
-CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
-CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+_default_redis_url = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', _default_redis_url)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', _default_redis_url)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
