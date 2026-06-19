@@ -11,6 +11,8 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event, track_return_visit_7d
 from .models import AffiliateMarketer, AffiliateReferral, MarketerWallet, OTPCode, UserProfile
 from .serializers import RegisterSerializer, UserSerializer, EducatorSerializer, GoogleAuthSerializer, ForgotPasswordSerializer, VerifyResetOTPSerializer, ResetPasswordSerializer
 from .utils import (
@@ -110,6 +112,9 @@ class VerifyOTPView(APIView):
         profile, _ = UserProfile.objects.get_or_create(user=user)
         credit_verified_referral_signup(user)
         send_welcome_email(user, profile.role)
+        track_event(request, AnalyticsEvent.SIGNUP_COMPLETED, user=user, metadata={'role': profile.role})
+        if profile.role == 'educator':
+            track_event(request, AnalyticsEvent.CREATOR_SIGNUP_COMPLETED, user=user)
 
         return Response({'detail': 'Email verified successfully. Please sign in.'}, status=status.HTTP_200_OK)
 
@@ -154,6 +159,7 @@ class LoginView(APIView):
                 pass
             return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
+        track_return_visit_7d(request, user)
         return Response(
             {'user': UserSerializer(user, context={'request': request}).data, 'tokens': get_tokens_for_user(user)},
             status=status.HTTP_200_OK,
@@ -260,6 +266,11 @@ class GoogleAuthView(APIView):
             credit_verified_referral_signup(user)
             send_welcome_email(user, role)
             is_new_user = True
+            track_event(request, AnalyticsEvent.SIGNUP_COMPLETED, user=user, metadata={'role': role, 'provider': 'google'})
+            if role == 'educator':
+                track_event(request, AnalyticsEvent.CREATOR_SIGNUP_COMPLETED, user=user, metadata={'provider': 'google'})
+        else:
+            track_return_visit_7d(request, user)
 
         return Response(
             {

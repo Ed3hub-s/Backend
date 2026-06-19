@@ -8,6 +8,8 @@ import json
 import re
 
 from authentication.utils import credit_first_purchase_commission
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event
 from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
@@ -573,6 +575,7 @@ class CourseCreateView(APIView):
                 logger.info(f"Course created: {course.id}")
                 if modules_data is not None:
                     sync_course_content(course, modules_data)
+                track_event(request, AnalyticsEvent.COURSE_UPLOADED, course=course)
         except ValueError as exc:
             return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         
@@ -629,6 +632,12 @@ class CourseListView(generics.ListAPIView):
             qs = qs.filter(category__slug=category)
         return qs
 
+    def list(self, request, *args, **kwargs):
+        search_term = request.query_params.get('search', '').strip()
+        if search_term:
+            track_event(request, AnalyticsEvent.SEARCH_USED, metadata={'query': search_term})
+        return super().list(request, *args, **kwargs)
+
     def get_serializer_context(self):
         return {'request': self.request}
 
@@ -658,6 +667,12 @@ class EnrolledCourseDetailView(generics.RetrieveAPIView):
     def get_serializer_context(self):
         return {'request': self.request}
 
+    def retrieve(self, request, *args, **kwargs):
+        course = self.get_object()
+        track_event(request, AnalyticsEvent.COURSE_PAGE_VIEW, course=course)
+        serializer = self.get_serializer(course)
+        return Response(serializer.data)
+
 
 class CourseDetailView(generics.RetrieveAPIView):
     queryset = Course.objects.filter(is_published=True).prefetch_related(
@@ -673,6 +688,12 @@ class CourseDetailView(generics.RetrieveAPIView):
 
     def get_serializer_context(self):
         return {'request': self.request}
+
+    def retrieve(self, request, *args, **kwargs):
+        course = self.get_object()
+        track_event(request, AnalyticsEvent.COURSE_PAGE_VIEW, course=course)
+        serializer = self.get_serializer(course)
+        return Response(serializer.data)
 
 
 class LessonDetailView(generics.RetrieveAPIView):
@@ -722,6 +743,13 @@ class EnrollView(APIView):
                 )
             credit_first_purchase_commission(request.user, course)
 
+        track_event(
+            request,
+            AnalyticsEvent.COURSE_PURCHASE_COMPLETED,
+            course=course,
+            metadata={'is_free': course.is_free, 'price': str(course.price)},
+        )
+
         return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
 
 
@@ -750,10 +778,13 @@ class CompleteLessonView(APIView):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         lp, _ = LessonProgress.objects.get_or_create(enrollment=enrollment, lesson=lesson)
+        was_not_started = not LessonProgress.objects.filter(enrollment=enrollment, completed=True).exists()
         if not lp.completed:
             lp.completed = True
             lp.completed_at = timezone.now()
             lp.save()
+            if was_not_started:
+                track_event(request, AnalyticsEvent.COURSE_STARTED, course=enrollment.course)
             self._update_progress(enrollment)
 
         return Response(LessonProgressSerializer(lp).data)
@@ -766,14 +797,22 @@ class CompleteLessonView(APIView):
         enrollment.progress_percent = round((completed / total_lessons) * 100)
 
         if enrollment.progress_percent >= 100:
+            was_completed = enrollment.completed
             enrollment.completed = True
-            enrollment.completed_at = timezone.now()
-            award_tokens(
-                enrollment.learner,
-                enrollment.course.completion_tokens,
-                'course_complete',
-                f'Completed course: {enrollment.course.title}',
-            )
+            if not was_completed:
+                enrollment.completed_at = timezone.now()
+                award_tokens(
+                    enrollment.learner,
+                    enrollment.course.completion_tokens,
+                    'course_complete',
+                    f'Completed course: {enrollment.course.title}',
+                )
+                track_event(
+                    self.request,
+                    AnalyticsEvent.COURSE_COMPLETED,
+                    user=enrollment.learner,
+                    course=enrollment.course,
+                )
         enrollment.save()
 
 

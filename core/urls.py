@@ -6,6 +6,8 @@ from django.shortcuts import render
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event
 
 schema_view = get_schema_view(
     openapi.Info(title='Ed3Hub API', default_version='v1', description='Authentication API for Ed3Hub'),
@@ -14,12 +16,14 @@ schema_view = get_schema_view(
 )
 
 def api_landing(request):
+    track_event(request, AnalyticsEvent.LANDING_PAGE_VIEW)
     return render(request, 'api_landing.html')
 
 urlpatterns = [
     path('', api_landing, name='api-landing'),
     path('admin/', admin.site.urls),
     path('api/auth/', include('authentication.urls')),
+    path('api/analytics/', include('analytics.urls')),
     path('api/courses/', include('courses.urls')),
     path('api/chat/', include('chat.urls')),
     path('api/notifications/', include('notifications.urls')),

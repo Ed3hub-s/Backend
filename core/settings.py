@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'storages',
     # Local
     'authentication',
+    'analytics',
     'courses',
     'chat',
     'notifications',
@@ -222,6 +223,13 @@ UNFOLD = {
                     {'title': 'Marketer Wallets', 'icon': 'payments', 'link': '/admin/authentication/marketerwallet/'},
                     {'title': 'Newsletters', 'icon': 'mail', 'link': '/admin/authentication/newslettercampaign/'},
                     {'title': 'OTP Codes', 'icon': 'lock', 'link': '/admin/authentication/otpcode/'},
+                ],
+            },
+            {
+                'title': 'Analytics',
+                'separator': True,
+                'items': [
+                    {'title': 'Activity events', 'icon': 'query_stats', 'link': '/admin/analytics/analyticsevent/'},
                 ],
             },
             {
