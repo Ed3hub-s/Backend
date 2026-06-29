@@ -214,6 +214,7 @@ class CourseCompletionRewardTests(TestCase):
         self.client = APIClient()
         self.instructor = User.objects.create_user(username='educator', password='pass')
         self.learner = User.objects.create_user(username='learner', password='pass')
+        UserProfile.objects.create(user=self.instructor, role='educator')
         self.course = Course.objects.create(
             instructor=self.instructor,
             title='Reward Course',
@@ -277,6 +278,20 @@ class CourseCompletionRewardTests(TestCase):
             TokenTransaction.objects.filter(wallet=wallet, reason='course_complete', amount=25).count(),
             1,
         )
+
+    def test_creator_tokens_show_on_educator_wallet_endpoint(self):
+        self.client.force_authenticate(self.learner)
+        self.client.post(f'/api/courses/lessons/{self.lesson.id}/complete/')
+
+        self.client.force_authenticate(self.instructor)
+        response = self.client.get('/api/courses/educator/wallet/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['token_balance'], 0)
+        self.assertEqual(response.data['pending_token_balance'], 50)
+        self.assertEqual(response.data['total_token_earned'], 50)
+        self.assertEqual(response.data['token_transactions'][0]['amount'], 50)
+        self.assertFalse(response.data['token_transactions'][0]['is_claimed'])
 
 
 class AffiliateCommissionTests(TestCase):
