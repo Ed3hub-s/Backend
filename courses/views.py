@@ -37,6 +37,24 @@ def award_tokens(user, amount, reason, description):
     return wallet
 
 
+def award_course_completion_tokens(enrollment):
+    course = enrollment.course
+    award_tokens(
+        enrollment.learner,
+        course.completion_tokens,
+        'course_complete',
+        f'Completed course: {course.title}',
+    )
+
+    if course.instructor_id != enrollment.learner_id:
+        award_tokens(
+            course.instructor,
+            course.completion_tokens,
+            'course_complete',
+            f'{enrollment.learner.username} completed your course: {course.title}',
+        )
+
+
 def create_course_content(course, modules_data):
     """Create modules with lessons, quizzes, and assessments."""
     import logging
@@ -801,12 +819,7 @@ class CompleteLessonView(APIView):
             enrollment.completed = True
             if not was_completed:
                 enrollment.completed_at = timezone.now()
-                award_tokens(
-                    enrollment.learner,
-                    enrollment.course.completion_tokens,
-                    'course_complete',
-                    f'Completed course: {enrollment.course.title}',
-                )
+                award_course_completion_tokens(enrollment)
                 track_event(
                     self.request,
                     AnalyticsEvent.COURSE_COMPLETED,

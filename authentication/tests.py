@@ -1,12 +1,23 @@
 from datetime import timedelta
 from unittest.mock import Mock, patch
 
+from django.contrib import admin as django_admin
 from django.contrib.auth.models import User
 from django.test import TestCase
+from django.test import RequestFactory
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import AffiliateMarketer, AffiliateReferral, OTPCode, UserProfile
+from .admin import NewsletterCampaignAdmin
+from .models import (
+    AffiliateMarketer,
+    AffiliateReferral,
+    NewsletterCampaign,
+    NewsletterDeliveryLog,
+    OTPCode,
+    UserProfile,
+)
+from .newsletter_delivery import send_due_newsletter_campaigns
 
 
 class WelcomeEmailTests(TestCase):
@@ -102,3 +113,73 @@ class AffiliateSignupFlowTests(TestCase):
         self.assertEqual(dashboard.data['total_referred_users'], 1)
         self.assertEqual(dashboard.data['referrals'][0]['username'], 'referred')
         self.assertFalse(dashboard.data['referrals'][0]['signup_bonus_paid'])
+
+
+class NewsletterSchedulerFallbackTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser(
+            username='admin',
+            email='',
+            password='StrongPass123',
+        )
+        User.objects.create_user(
+            username='recipient',
+            email='recipient@example.com',
+            password='StrongPass123',
+            is_active=True,
+        )
+
+    def create_campaign(self, *, scheduled_for):
+        return NewsletterCampaign.objects.create(
+            title='Scheduled Newsletter',
+            subject='Platform update',
+            body_html='<p>Latest Ed3Hub updates.</p>',
+            status=NewsletterCampaign.STATUS_SCHEDULED,
+            scheduled_for=scheduled_for,
+        )
+
+    @patch('authentication.models.send_smart_email', return_value=True)
+    def test_due_newsletter_is_sent_without_celery_or_redis(self, send_email):
+        campaign = self.create_campaign(scheduled_for=timezone.now() - timedelta(minutes=1))
+
+        results = send_due_newsletter_campaigns()
+
+        campaign.refresh_from_db()
+        self.assertEqual(results[0]['campaign_id'], campaign.id)
+        self.assertEqual(results[0]['sent'], 1)
+        self.assertEqual(results[0]['failed'], 0)
+        self.assertEqual(campaign.status, NewsletterCampaign.STATUS_SENT)
+        self.assertEqual(campaign.successful_sends, 1)
+        self.assertEqual(
+            NewsletterDeliveryLog.objects.get(campaign=campaign).status,
+            NewsletterDeliveryLog.STATUS_SENT,
+        )
+        send_email.assert_called_once()
+
+    @patch('authentication.models.send_smart_email', return_value=True)
+    def test_future_newsletter_stays_scheduled(self, send_email):
+        campaign = self.create_campaign(scheduled_for=timezone.now() + timedelta(hours=1))
+
+        results = send_due_newsletter_campaigns()
+
+        campaign.refresh_from_db()
+        self.assertEqual(results, [])
+        self.assertEqual(campaign.status, NewsletterCampaign.STATUS_SCHEDULED)
+        send_email.assert_not_called()
+
+    def test_admin_save_with_schedule_marks_draft_as_scheduled(self):
+        request = RequestFactory().post('/')
+        request.user = self.admin_user
+        campaign = NewsletterCampaign(
+            title='Draft With Date',
+            subject='Platform update',
+            body_html='<p>Latest Ed3Hub updates.</p>',
+            status=NewsletterCampaign.STATUS_DRAFT,
+            scheduled_for=timezone.now() + timedelta(hours=1),
+        )
+        admin = NewsletterCampaignAdmin(NewsletterCampaign, django_admin.site)
+
+        admin.save_model(request, campaign, form=None, change=False)
+
+        campaign.refresh_from_db()
+        self.assertEqual(campaign.status, NewsletterCampaign.STATUS_SCHEDULED)

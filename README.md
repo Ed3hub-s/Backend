@@ -52,6 +52,20 @@ API available at: **http://localhost:8000**
 Admin panel: **http://localhost:8000/admin**
 API docs (Swagger): **http://localhost:8000/swagger/**
 
+## Scheduled Newsletters Without Redis/Celery
+
+Celery beat can still send scheduled newsletters when Redis is running. If Redis or Celery is unavailable, run the database-backed scheduler instead:
+
+```bash
+python manage.py send_due_newsletters --loop --interval 600
+```
+
+For cron or Windows Task Scheduler, run it once every 5-10 minutes instead:
+
+```bash
+python manage.py send_due_newsletters
+```
+
 ## Docker
 
 ```bash

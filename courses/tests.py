@@ -17,6 +17,8 @@ from .models import (
     Module,
     Question,
     Quiz,
+    TokenTransaction,
+    TokenWallet,
 )
 
 
@@ -205,6 +207,76 @@ class CourseUpdateSyncTests(TestCase):
         self.assertEqual(first_module.lessons.get().title, 'First Lesson')
         self.assertEqual(first_module.quiz.questions.get().text, 'First quiz?')
         self.assertEqual(first_module.assessments.get().title, 'First assessment')
+
+
+class CourseCompletionRewardTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.instructor = User.objects.create_user(username='educator', password='pass')
+        self.learner = User.objects.create_user(username='learner', password='pass')
+        self.course = Course.objects.create(
+            instructor=self.instructor,
+            title='Reward Course',
+            slug='reward-course',
+            description='Reward description',
+            is_published=True,
+            is_free=True,
+            completion_tokens=50,
+        )
+        self.module = Module.objects.create(course=self.course, title='Reward Module', order=1)
+        self.lesson = Lesson.objects.create(module=self.module, title='Reward Lesson', order=1)
+        self.enrollment = Enrollment.objects.create(learner=self.learner, course=self.course)
+
+    def test_course_completion_awards_learner_and_creator_tokens(self):
+        self.client.force_authenticate(self.learner)
+
+        response = self.client.post(f'/api/courses/lessons/{self.lesson.id}/complete/')
+
+        self.assertEqual(response.status_code, 200)
+        self.enrollment.refresh_from_db()
+        self.assertTrue(self.enrollment.completed)
+
+        learner_wallet = TokenWallet.objects.get(learner=self.learner)
+        creator_wallet = TokenWallet.objects.get(learner=self.instructor)
+        learner_tx = TokenTransaction.objects.get(wallet=learner_wallet, reason='course_complete')
+        creator_tx = TokenTransaction.objects.get(wallet=creator_wallet, reason='course_complete')
+
+        self.assertEqual(learner_tx.amount, 50)
+        self.assertEqual(creator_tx.amount, 50)
+        self.assertEqual(learner_tx.description, 'Completed course: Reward Course')
+        self.assertEqual(creator_tx.description, 'learner completed your course: Reward Course')
+
+    def test_repeating_completed_lesson_does_not_duplicate_course_rewards(self):
+        self.client.force_authenticate(self.learner)
+
+        self.client.post(f'/api/courses/lessons/{self.lesson.id}/complete/')
+        self.client.post(f'/api/courses/lessons/{self.lesson.id}/complete/')
+
+        self.assertEqual(TokenTransaction.objects.filter(reason='course_complete').count(), 2)
+
+    def test_instructor_completing_own_course_gets_single_completion_reward(self):
+        own_course = Course.objects.create(
+            instructor=self.instructor,
+            title='Own Course',
+            slug='own-course',
+            description='Own description',
+            is_published=True,
+            is_free=True,
+            completion_tokens=25,
+        )
+        own_module = Module.objects.create(course=own_course, title='Own Module', order=1)
+        own_lesson = Lesson.objects.create(module=own_module, title='Own Lesson', order=1)
+        Enrollment.objects.create(learner=self.instructor, course=own_course)
+
+        self.client.force_authenticate(self.instructor)
+        response = self.client.post(f'/api/courses/lessons/{own_lesson.id}/complete/')
+
+        self.assertEqual(response.status_code, 200)
+        wallet = TokenWallet.objects.get(learner=self.instructor)
+        self.assertEqual(
+            TokenTransaction.objects.filter(wallet=wallet, reason='course_complete', amount=25).count(),
+            1,
+        )
 
 
 class AffiliateCommissionTests(TestCase):

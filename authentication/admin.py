@@ -238,6 +238,8 @@ class NewsletterCampaignAdmin(ModelAdmin):
     def save_model(self, request, obj, form, change):
         if not obj.created_by_id:
             obj.created_by = request.user
+        if obj.scheduled_for and obj.status == NewsletterCampaign.STATUS_DRAFT:
+            obj.status = NewsletterCampaign.STATUS_SCHEDULED
         super().save_model(request, obj, form, change)
 
     def recipient_count(self, obj):
