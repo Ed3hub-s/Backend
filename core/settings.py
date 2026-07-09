@@ -288,6 +288,7 @@ PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
 # Frontend URLs
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://ed3hub.com')
 AFFILIATE_FRONTEND_URL = os.getenv('AFFILIATE_FRONTEND_URL', 'https://ed3hub.com')
+NEWSLETTER_LOGO_URL = os.getenv('NEWSLETTER_LOGO_URL', f'{FRONTEND_URL.rstrip("/")}/static/img/ed3hub_logo.png')
 
 # REST Framework
 REST_FRAMEWORK = {

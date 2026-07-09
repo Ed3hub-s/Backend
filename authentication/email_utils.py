@@ -19,6 +19,11 @@ def build_branded_email_html(
 ) -> str:
     """Wrap email content with Ed3Hub header, footer, and signature."""
     frontend_url = getattr(settings, 'FRONTEND_URL', 'https://ed3hub.com').rstrip('/')
+    logo_url = getattr(
+        settings,
+        'NEWSLETTER_LOGO_URL',
+        f'{frontend_url}/static/img/ed3hub_logo.png',
+    )
     footer_note = footer_note or (
         'You are receiving this email because you joined Ed3Hub as a learner or educator.'
     )
@@ -30,6 +35,7 @@ def build_branded_email_html(
     safe_footer_note = escape(footer_note)
     safe_cta_text = escape(cta_text)
     safe_cta_url = escape(cta_url)
+    safe_logo_url = escape(logo_url)
     cta_markup = ''
     if cta_text and cta_url:
         cta_markup = f'''
@@ -55,6 +61,7 @@ def build_branded_email_html(
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 640px; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e5e7eb;">
             <tr>
               <td style="background: #0f172a; color: #ffffff; padding: 28px 32px;">
+                <img src="{safe_logo_url}" width="52" height="52" alt="Ed3Hub" style="display: block; width: 52px; height: 52px; object-fit: contain; margin: 0 0 16px;">
                 <div style="font-size: 24px; font-weight: 800; letter-spacing: 0;">{safe_header_title}</div>
                 <div style="margin-top: 6px; color: #cbd5e1; font-size: 14px;">{safe_header_subtitle}</div>
               </td>

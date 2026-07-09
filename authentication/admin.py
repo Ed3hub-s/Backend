@@ -2,11 +2,13 @@ from django.contrib import admin
 from django.contrib import messages
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
+from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import path, reverse
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline
 
+from .email_utils import build_branded_email_html
 from .forms import NewsletterContactCSVImportForm
 from .models import (
     AffiliateMarketer,
@@ -204,6 +206,9 @@ class NewsletterContactAdmin(ModelAdmin):
 
 @admin.register(NewsletterCampaign)
 class NewsletterCampaignAdmin(ModelAdmin):
+    class Media:
+        js = ('admin/authentication/newsletter_campaign_preview.js',)
+
     list_display = (
         'title', 'audience', 'status', 'scheduled_for',
         'total_recipients', 'successful_sends', 'failed_sends', 'created_at',
@@ -235,6 +240,17 @@ class NewsletterCampaignAdmin(ModelAdmin):
     inlines = [NewsletterDeliveryLogInline]
     actions = ('send_newsletters_now', 'schedule_newsletters')
 
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                'preview/',
+                self.admin_site.admin_view(self.preview_email_view),
+                name='authentication_newslettercampaign_preview',
+            ),
+        ]
+        return custom_urls + urls
+
     def save_model(self, request, obj, form, change):
         if not obj.created_by_id:
             obj.created_by = request.user
@@ -249,13 +265,33 @@ class NewsletterCampaignAdmin(ModelAdmin):
     recipient_count.short_description = 'Matching recipients'
 
     def email_preview(self, obj):
-        if not obj.pk:
-            return 'Save first to preview the branded email.'
+        preview_url = reverse('admin:authentication_newslettercampaign_preview')
+        initial_html = obj.render_html() if obj and obj.pk else build_branded_email_html(
+            subject='Newsletter preview',
+            body_html='',
+            header_title='Ed3Hub Newsletter',
+            header_subtitle='Updates for learners and educators',
+            footer_note='You are receiving this email because you joined Ed3Hub as a learner or educator.',
+        )
         return format_html(
-            '<iframe srcdoc="{}" style="width: 100%; min-height: 520px; border: 1px solid #e5e7eb; border-radius: 12px; background: white;"></iframe>',
-            obj.render_html(),
+            '<iframe id="newsletter-email-preview" data-preview-url="{}" srcdoc="{}" style="width: 100%; min-height: 520px; border: 1px solid #e5e7eb; border-radius: 12px; background: white;"></iframe>',
+            preview_url,
+            initial_html,
         )
     email_preview.short_description = 'Preview'
+
+    def preview_email_view(self, request):
+        html = build_branded_email_html(
+            subject=request.POST.get('subject', ''),
+            body_html=request.POST.get('body_html', ''),
+            preheader=request.POST.get('preheader', ''),
+            header_title=request.POST.get('header_title', ''),
+            header_subtitle=request.POST.get('header_subtitle', ''),
+            footer_note=request.POST.get('footer_note', ''),
+            cta_text=request.POST.get('cta_text', ''),
+            cta_url=request.POST.get('cta_url', ''),
+        )
+        return JsonResponse({'html': html})
 
     @admin.action(description='Send selected newsletters now')
     def send_newsletters_now(self, request, queryset):
