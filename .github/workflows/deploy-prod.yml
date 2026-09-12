@@ -4,14 +4,16 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
 
 env:
-  REGISTRY: registry.digitalocean.com/ed3hub
-  IMAGE_NAME: ed3hub-backend
+  REGISTRY: fra.ocir.io
+  NAMESPACE: fr9nfbzwaxn7
+  IMAGE_NAME: backend
 
 jobs:
 
@@ -30,7 +32,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test:
-    name: Run basic tests
+    name: Run Django system check
     runs-on: ubuntu-latest
     needs: gitleaks
     steps:
@@ -46,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Create minimal .env for testing
+      - name: Create minimal .env for CI
         run: |
           echo "SECRET_KEY=test-secret-key-for-ci-only" >> .env
           echo "DEBUG=True" >> .env
@@ -58,20 +60,31 @@ jobs:
         run: python manage.py check
 
   build-and-push:
-    name: Build and push Docker image
+    name: Build and push image to OCIR
     runs-on: ubuntu-latest
     needs: test
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+      - name: Log in to Oracle Container Registry
+        uses: docker/login-action@v3
         with:
-          token: ${{ secrets.DOCR_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_AUTH_TOKEN }}
 
-      - name: Log in to DigitalOcean Container Registry
-        run: doctl registry login --expiry-seconds 1200
+      - name: Extract metadata for tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -81,7 +94,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:prod
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -90,18 +105,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-push
     steps:
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+      - name: Log in to Oracle Container Registry
+        uses: docker/login-action@v3
         with:
-          token: ${{ secrets.DOCR_TOKEN }}
-
-      - name: Log in to DigitalOcean Container Registry
-        run: doctl registry login --expiry-seconds 1200
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.OCIR_USERNAME }}
+          password: ${{ secrets.OCIR_AUTH_TOKEN }}
 
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:prod
+          image-ref: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ env.IMAGE_NAME }}:latest
           format: json
           output: trivy-results.json
           severity: CRITICAL,HIGH
@@ -118,10 +132,10 @@ jobs:
             --output /workspace/trivy-report.html \
             /workspace/trivy-results.json
 
-      - name: Upload Trivy report as artifact
+      - name: Upload Trivy report
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-vulnerability-report-prod
+          name: trivy-vulnerability-report
           path: |
             trivy-results.json
             trivy-report.html
@@ -129,18 +143,23 @@ jobs:
           if-no-files-found: ignore
 
   deploy:
-    name: Deploy to Droplet
+    name: Deploy to Oracle VPS
     runs-on: ubuntu-latest
     needs: trivy
     steps:
-      - name: SSH into Droplet and deploy
+      - name: SSH into VPS and deploy
         uses: appleboy/ssh-action@v1
+        env:
+          OCIR_USER: ${{ secrets.OCIR_USERNAME }}
+          OCIR_PASS: ${{ secrets.OCIR_AUTH_TOKEN }}
         with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: OCIR_USER,OCIR_PASS
           script: |
-            doctl registry login --expiry-seconds 1200
-            docker pull registry.digitalocean.com/ed3hub/ed3hub-backend:prod
-            docker compose -f /var/www/ed3hub/prod/docker-compose.prod.yml up -d --no-deps backend-prod celery-prod celery-beat-prod
+            cd /opt/ed3hub
+            echo "$OCIR_PASS" | docker login fra.ocir.io -u "$OCIR_USER" --password-stdin
+            docker compose pull backend
+            docker compose up -d --no-deps backend celery celery-beat
             docker image prune -f
