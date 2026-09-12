@@ -1,3 +1,4 @@
+# Python
 __pycache__
 *.pyc
 *.pyo
@@ -8,17 +9,48 @@ __pycache__
 *.egg-info
 dist
 build
-.env
 .venv
 venv/
 ENV/
 env/
+
+# Secrets and env
+.env
+.env.*
+!.env.example
+
+# VCS
 .git
 .gitignore
+
+# Databases (local dev only)
 *.sqlite3
 db.sqlite3
+
+# Editors
 .vscode
 .idea
 *.swp
 *.swo
 .DS_Store
+
+# User-generated content (belongs in R2, not the image)
+media/
+staticfiles/
+courses/videos/
+courses/thumbnails/
+avatars/
+certificates/
+
+# CI and docs (not needed at runtime)
+.github/
+*.md
+!README.md
+DEPLOYMENT_CHECKLIST.md
+DOCKER_README.md
+DOCKER_SETUP_GUIDE_WINDOWS.md
+
+# Tests and dev helpers
+test_smtp.py
+tsc_errors.txt
+build_output.txt

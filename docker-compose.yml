@@ -39,6 +39,7 @@ services:
       dockerfile: Dockerfile
     container_name: ed3hub-celery
     command: celery -A core worker -l info
+    entrypoint: []
     volumes:
       - .:/app
     env_file:
