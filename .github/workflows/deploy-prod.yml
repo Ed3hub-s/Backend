@@ -133,11 +133,6 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-  deploy:
-    name: Deploy to Oracle VPS
-    runs-on: ubuntu-latest
-    needs: trivy
-    steps:
       - name: SSH into VPS and deploy
         uses: appleboy/ssh-action@v1
         env:
@@ -149,6 +144,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           envs: OCIR_USER,OCIR_PASS
           script: |
+            set -euo pipefail
             cd /opt/ed3hub
             echo "$OCIR_PASS" | docker login fra.ocir.io -u "$OCIR_USER" --password-stdin
             docker compose pull backend
