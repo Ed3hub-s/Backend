@@ -347,3 +347,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Allow large file uploads (videos, thumbnails) — 100 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600
 FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600
+
+# Behind a reverse proxy (Nginx + Cloudflare) that terminates TLS
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
