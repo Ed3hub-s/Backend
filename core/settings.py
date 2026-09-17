@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     'courses',
     'chat',
     'notifications',
+    'live_classes',
 ]
 
 SITE_ID = 1
@@ -102,7 +103,7 @@ CELERY_TIMEZONE = 'UTC'
 
 
 # Database
-if os.getenv('DB_NAME'):
+if os.getenv('DB_NAME') and os.getenv('USE_SQLITE', 'False') != 'True':
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -254,6 +255,17 @@ UNFOLD = {
                 ],
             },
             {
+                'title': 'Live Classes',
+                'separator': True,
+                'items': [
+                    {'title': 'Live Classes', 'icon': 'video_camera_front', 'link': '/admin/live_classes/liveclass/'},
+                    {'title': 'Registrations', 'icon': 'how_to_reg', 'link': '/admin/live_classes/liveclassregistration/'},
+                    {'title': 'Payments', 'icon': 'payments', 'link': '/admin/live_classes/liveclasspayment/'},
+                    {'title': 'Attendance', 'icon': 'groups', 'link': '/admin/live_classes/liveclassattendance/'},
+                    {'title': 'Recordings', 'icon': 'movie', 'link': '/admin/live_classes/liveclassrecording/'},
+                ],
+            },
+            {
                 'title': 'Chat',
                 'separator': True,
                 'items': [
@@ -284,6 +296,20 @@ CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', 'ht
 
 # Paystack
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
+
+# Cloudflare RealtimeKit. The web client is intentionally pinned to the v1 SDK
+# line; all management credentials remain on this Django server.
+CLOUDFLARE_ACCOUNT_ID = os.getenv('CLOUDFLARE_ACCOUNT_ID', '')
+CLOUDFLARE_REALTIMEKIT_APP_ID = os.getenv('CLOUDFLARE_REALTIMEKIT_APP_ID', '')
+CLOUDFLARE_REALTIMEKIT_API_TOKEN = os.getenv('CLOUDFLARE_REALTIMEKIT_API_TOKEN', '')
+CLOUDFLARE_REALTIMEKIT_INSTRUCTOR_PRESET = os.getenv(
+    'CLOUDFLARE_REALTIMEKIT_INSTRUCTOR_PRESET', 'webinar_presenter'
+)
+CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET = os.getenv(
+    'CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET', 'webinar_viewer'
+)
+LIVE_CLASS_JOIN_EARLY_MINUTES = int(os.getenv('LIVE_CLASS_JOIN_EARLY_MINUTES', '15'))
+LIVE_CLASS_JOIN_LATE_MINUTES = int(os.getenv('LIVE_CLASS_JOIN_LATE_MINUTES', '30'))
 
 # Frontend URLs
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'https://ed3hub.com')

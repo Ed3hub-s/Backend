@@ -27,6 +27,7 @@ urlpatterns = [
     path('api/courses/', include('courses.urls')),
     path('api/chat/', include('chat.urls')),
     path('api/notifications/', include('notifications.urls')),
+    path('api/live-classes/', include('live_classes.urls')),
     path('api/docs/', schema_view.with_ui('swagger', cache_timeout=0), name='swagger-ui'),
     path('api/redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='redoc'),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

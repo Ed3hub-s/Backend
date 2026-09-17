@@ -26,4 +26,12 @@ app.conf.beat_schedule = {
         'task': 'authentication.tasks.send_due_newsletters',
         'schedule': crontab(minute='*/10'),  # Every 10 minutes
     },
+    'send-live-class-reminders': {
+        'task': 'live_classes.tasks.send_due_live_class_reminders',
+        'schedule': crontab(minute='*/5'),
+    },
+    'close-stale-live-class-attendance': {
+        'task': 'live_classes.tasks.close_stale_attendance_visits',
+        'schedule': crontab(hour=3, minute=15),
+    },
 }

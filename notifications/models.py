@@ -29,6 +29,9 @@ class Notification(models.Model):
         ('session_starting', 'Session Starting'),
         ('session_cancelled', 'Session Cancelled'),
         ('session_rescheduled', 'Session Rescheduled'),
+        ('live_class_registered', 'Live Class Registration'),
+        ('live_class_reminder', 'Live Class Reminder'),
+        ('live_class_cancelled', 'Live Class Cancelled'),
         
         # Chat
         ('new_message', 'New Message'),
@@ -60,6 +63,7 @@ class Notification(models.Model):
     # Related objects
     course = models.ForeignKey(Course, null=True, blank=True, on_delete=models.CASCADE)
     session = models.ForeignKey(Session, null=True, blank=True, on_delete=models.CASCADE)
+    live_class = models.ForeignKey('live_classes.LiveClass', null=True, blank=True, on_delete=models.CASCADE)
     message_obj = models.ForeignKey(Message, null=True, blank=True, on_delete=models.CASCADE)
     
     # Action URL
