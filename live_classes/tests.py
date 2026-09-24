@@ -3,16 +3,19 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+import requests
 from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
 from django.test import override_settings
 from django.utils import timezone
+from rest_framework.exceptions import APIException
 from rest_framework.test import APITestCase
 
 from authentication.models import UserProfile
 
 from .models import LiveClass, LiveClassPayment, LiveClassRegistration
+from .services import CloudflareRealtimeKitV1, ProviderConfigurationError
 
 
 class LiveClassAPITests(APITestCase):
@@ -158,3 +161,34 @@ class LiveClassAPITests(APITestCase):
         self.assertEqual(response.status_code, 200)
         registration.refresh_from_db()
         self.assertEqual(registration.access_status, 'active')
+
+
+@override_settings(
+    CLOUDFLARE_ACCOUNT_ID='account-id',
+    CLOUDFLARE_REALTIMEKIT_APP_ID='app-id',
+    CLOUDFLARE_REALTIMEKIT_API_TOKEN='api-token',
+)
+class CloudflareRealtimeKitTests(APITestCase):
+    @patch('live_classes.services.requests.request')
+    def test_permission_failure_has_actionable_safe_message(self, mocked_request):
+        mocked_request.return_value = Mock(
+            ok=False,
+            status_code=403,
+            json=Mock(return_value={
+                'success': False,
+                'errors': [{'code': 10000, 'message': 'Authentication error'}],
+            }),
+        )
+
+        with self.assertRaisesMessage(
+            ProviderConfigurationError,
+            'not authorized to create classrooms',
+        ):
+            CloudflareRealtimeKitV1()._request('POST', '/meetings', {})
+
+    @patch('live_classes.services.requests.request')
+    def test_unreachable_provider_has_retryable_message(self, mocked_request):
+        mocked_request.side_effect = requests.ConnectionError('offline')
+
+        with self.assertRaisesMessage(APIException, 'temporarily unreachable'):
+            CloudflareRealtimeKitV1()._request('POST', '/meetings', {})

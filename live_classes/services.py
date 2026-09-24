@@ -46,12 +46,39 @@ class CloudflareRealtimeKitV1:
                 params=params,
                 timeout=self.timeout,
             )
-            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.exception('Cloudflare RealtimeKit request failed before a response was received')
+            raise APIException('The classroom provider is temporarily unreachable. Please try again.') from exc
+
+        try:
             body = response.json()
-        except (requests.RequestException, ValueError) as exc:
-            logger.exception('Cloudflare RealtimeKit request failed')
-            raise APIException('Cloudflare could not prepare the classroom. Please try again.') from exc
+        except ValueError as exc:
+            logger.error(
+                'Cloudflare RealtimeKit returned a non-JSON response (status=%s, path=%s)',
+                response.status_code,
+                path,
+            )
+            raise APIException('The classroom provider returned an invalid response. Please try again.') from exc
+
+        if not response.ok:
+            provider_errors = body.get('errors') or []
+            logger.error(
+                'Cloudflare RealtimeKit rejected a request (status=%s, path=%s, errors=%s)',
+                response.status_code,
+                path,
+                provider_errors,
+            )
+            if response.status_code in (401, 403):
+                raise ProviderConfigurationError(
+                    'The live classroom provider is not authorized to create classrooms. Please contact support.'
+                )
+            if response.status_code == 404:
+                raise ProviderConfigurationError(
+                    'The live classroom provider account or app is configured incorrectly. Please contact support.'
+                )
+            raise APIException('Cloudflare rejected the classroom request. Please try again.')
         if not body.get('success', True):
+            logger.error('Cloudflare RealtimeKit request was unsuccessful (path=%s, errors=%s)', path, body.get('errors'))
             raise APIException('Cloudflare rejected the classroom request.')
         return body.get('data') or body.get('result') or {}
 
