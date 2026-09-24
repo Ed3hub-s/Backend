@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+from django.utils import timezone
+
 from .models import LiveClassReminder
 
 
@@ -16,6 +18,9 @@ def schedule_live_class_reminders(live_class):
         return
     for reminder_type, offset in REMINDER_OFFSETS.items():
         scheduled_for = live_class.starts_at - offset
+        if reminder_type != 'start' and scheduled_for <= timezone.now():
+            LiveClassReminder.objects.filter(live_class=live_class, reminder_type=reminder_type).delete()
+            continue
         LiveClassReminder.objects.update_or_create(
             live_class=live_class,
             reminder_type=reminder_type,

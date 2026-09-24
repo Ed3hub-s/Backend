@@ -131,6 +131,49 @@ class LiveClassAPITests(APITestCase):
         response = self.client.post('/api/live-classes/educator/', {}, format='json')
         self.assertEqual(response.status_code, 403)
 
+    def test_educator_can_start_scheduled_class_now(self):
+        live_class = self.make_class(minutes_from_now=3 * 24 * 60)
+        self.client.force_authenticate(self.educator)
+
+        response = self.client.patch(
+            f'/api/live-classes/educator/{live_class.slug}/',
+            {'start_now': True, 'status': 'published'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        live_class.refresh_from_db()
+        self.assertLess(abs((live_class.starts_at - timezone.now()).total_seconds()), 60)
+        self.assertTrue(live_class.is_joinable())
+
+    def test_educator_can_reschedule_class(self):
+        live_class = self.make_class(minutes_from_now=3 * 24 * 60)
+        new_start = timezone.localtime() + timedelta(days=1)
+        self.client.force_authenticate(self.educator)
+
+        response = self.client.patch(
+            f'/api/live-classes/educator/{live_class.slug}/',
+            {
+                'scheduled_date': new_start.date().isoformat(),
+                'scheduled_time': new_start.strftime('%H:%M'),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        live_class.refresh_from_db()
+        self.assertEqual(live_class.scheduled_date, new_start.date())
+        self.assertEqual(live_class.scheduled_time.strftime('%H:%M'), new_start.strftime('%H:%M'))
+
+    def test_educator_can_delete_unregistered_class(self):
+        live_class = self.make_class()
+        self.client.force_authenticate(self.educator)
+
+        response = self.client.delete(f'/api/live-classes/educator/{live_class.slug}/')
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(LiveClass.objects.filter(pk=live_class.pk).exists())
+
     @override_settings(PAYSTACK_SECRET_KEY='test-secret')
     @patch('live_classes.services.requests.get')
     def test_signed_paystack_webhook_activates_pending_access(self, mocked_get):

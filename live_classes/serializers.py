@@ -94,15 +94,21 @@ class LiveClassDetailSerializer(LiveClassListSerializer):
 
 
 class LiveClassWriteSerializer(serializers.ModelSerializer):
+    start_now = serializers.BooleanField(write_only=True, required=False, default=False)
+
     class Meta:
         model = LiveClass
         fields = (
             'id', 'slug', 'course', 'title', 'description', 'category', 'level',
             'scheduled_date', 'scheduled_time', 'duration_minutes', 'capacity',
             'cover_image', 'learning_objectives', 'requirements', 'access_type',
-            'price', 'currency', 'status', 'recording_enabled',
+            'price', 'currency', 'status', 'recording_enabled', 'start_now',
         )
         read_only_fields = ('id', 'slug')
+        extra_kwargs = {
+            'scheduled_date': {'required': False},
+            'scheduled_time': {'required': False},
+        }
 
     def validate_course(self, course):
         request = self.context['request']
@@ -111,6 +117,11 @@ class LiveClassWriteSerializer(serializers.ModelSerializer):
         return course
 
     def validate(self, attrs):
+        start_now = attrs.get('start_now', False)
+        if start_now:
+            now = timezone.localtime().replace(second=0, microsecond=0)
+            attrs['scheduled_date'] = now.date()
+            attrs['scheduled_time'] = now.time()
         access_type = attrs.get('access_type', getattr(self.instance, 'access_type', None))
         price = attrs.get('price', getattr(self.instance, 'price', 0))
         if access_type == 'paid' and price <= 0:
@@ -119,17 +130,25 @@ class LiveClassWriteSerializer(serializers.ModelSerializer):
             attrs['price'] = 0
         date = attrs.get('scheduled_date', getattr(self.instance, 'scheduled_date', None))
         start_time = attrs.get('scheduled_time', getattr(self.instance, 'scheduled_time', None))
+        if not self.instance and not start_now and (not date or not start_time):
+            raise serializers.ValidationError({'scheduled_date': 'Choose a date and time or start the class now.'})
         if date and start_time:
             from datetime import datetime
             starts_at = timezone.make_aware(datetime.combine(date, start_time), timezone.get_current_timezone())
-            if not self.instance and starts_at <= timezone.now():
+            schedule_changed = 'scheduled_date' in attrs or 'scheduled_time' in attrs
+            if not start_now and (not self.instance or schedule_changed) and starts_at <= timezone.now():
                 raise serializers.ValidationError({'scheduled_date': 'Live classes must be scheduled in the future.'})
         if not self.instance and not attrs.get('cover_image'):
             raise serializers.ValidationError({'cover_image': 'A cover image is required.'})
         return attrs
 
     def create(self, validated_data):
+        validated_data.pop('start_now', None)
         return LiveClass.objects.create(educator=self.context['request'].user, **validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop('start_now', None)
+        return super().update(instance, validated_data)
 
 
 class LiveClassRegistrationSerializer(serializers.ModelSerializer):
