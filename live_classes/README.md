@@ -11,6 +11,28 @@ This app implements the product rules in the Live Classes specification. It owns
    - a learner preset with participant viewing, chat, hand raise, and the media permissions you want learners to have.
 4. Set the `CLOUDFLARE_*` variables documented in `.env.example`.
 
+Interactive classes use `group_call_host` for educators and
+`group_call_participant` for learners. Both presets must use `GROUP_CALL`, allow
+audio/video production, have `show_participant_list=true`, and keep
+`hidden_participant=false`. Hosts can share their screen and moderate participants;
+learners can control their own camera/microphone without receiving host permissions.
+The shipped webinar preset names are mapped to these group-call presets even when
+an older deployment still has webinar values in its environment. Custom preset
+names are preserved; configure their permissions in the Cloudflare dashboard.
+
+Saved participants have their preset updated before their next token refresh.
+After deploying this change, both teachers and students should leave and rejoin
+the class so their existing sessions pick up the updated permissions. No class
+needs to be deleted or recreated. The browser starts with devices off and uses the
+complete meeting UI (video grid, screen-share stage, participant list, and chat).
+On narrow screens, additional controls may be in the UI Kit's More menu.
+
+Verify with a teacher and a registered student in two separate browser profiles:
+join the same class, enable each camera/microphone, confirm remote video/audio,
+open Participants, then share a teacher browser tab and confirm it on the student
+side. End the share and leave/rejoin to check the restored video grid and controls.
+Camera/microphone access requires HTTPS (or localhost) and browser permission.
+
 The classroom deliberately pins the browser assets to the v1 line:
 
 - `@cloudflare/realtimekit@1.5.1`

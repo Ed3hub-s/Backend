@@ -7,7 +7,7 @@ import requests
 from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
-from django.test import override_settings
+from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 from rest_framework.exceptions import APIException
 from rest_framework.test import APITestCase
@@ -15,7 +15,7 @@ from rest_framework.test import APITestCase
 from authentication.models import UserProfile
 
 from .models import LiveClass, LiveClassPayment, LiveClassRegistration
-from .services import CloudflareRealtimeKitV1, ProviderConfigurationError
+from .services import CloudflareRealtimeKitV1, ProviderConfigurationError, ProviderResourceNotFound
 
 
 class LiveClassAPITests(APITestCase):
@@ -131,6 +131,38 @@ class LiveClassAPITests(APITestCase):
         response = self.client.post('/api/live-classes/educator/', {}, format='json')
         self.assertEqual(response.status_code, 403)
 
+    @override_settings(
+        CLOUDFLARE_ACCOUNT_ID='account',
+        CLOUDFLARE_REALTIMEKIT_APP_ID='app',
+        CLOUDFLARE_REALTIMEKIT_API_TOKEN='token',
+        CLOUDFLARE_REALTIMEKIT_INSTRUCTOR_PRESET='webinar_presenter',
+        CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET='webinar_viewer',
+    )
+    @patch('live_classes.services.CloudflareRealtimeKitV1._request')
+    def test_host_and_student_join_the_same_interactive_room(self, request):
+        live_class = self.make_class(minutes_from_now=5)
+        LiveClassRegistration.objects.create(
+            live_class=live_class, learner=self.learner,
+            registration_status='confirmed', access_status='active',
+        )
+        request.side_effect = [
+            {'id': 'shared-room'},
+            {'id': 'host', 'token': 'host-token'},
+            {'id': 'student', 'token': 'student-token'},
+        ]
+        self.client.force_authenticate(self.educator)
+        host = self.client.post(f'/api/live-classes/{live_class.slug}/join/')
+        self.client.force_authenticate(self.learner)
+        student = self.client.post(f'/api/live-classes/{live_class.slug}/join/')
+        self.assertEqual(host.status_code, 200)
+        self.assertEqual(student.status_code, 200)
+        self.assertEqual(host.data['meeting_id'], student.data['meeting_id'])
+        self.assertEqual(request.call_args_list[1].args[2]['preset_name'], 'group_call_host')
+        self.assertEqual(request.call_args_list[2].args[2]['preset_name'], 'group_call_participant')
+        # A caller holding the original stale object must reuse the saved room.
+        self.assertEqual(CloudflareRealtimeKitV1().ensure_meeting(live_class), 'shared-room')
+        self.assertEqual(request.call_count, 3)
+
     def test_educator_can_start_scheduled_class_now(self):
         live_class = self.make_class(minutes_from_now=3 * 24 * 60)
         self.client.force_authenticate(self.educator)
@@ -211,7 +243,7 @@ class LiveClassAPITests(APITestCase):
     CLOUDFLARE_REALTIMEKIT_APP_ID='app-id',
     CLOUDFLARE_REALTIMEKIT_API_TOKEN='api-token',
 )
-class CloudflareRealtimeKitTests(APITestCase):
+class CloudflareRealtimeKitTests(SimpleTestCase):
     @patch('live_classes.services.requests.request')
     def test_permission_failure_has_actionable_safe_message(self, mocked_request):
         mocked_request.return_value = Mock(
@@ -235,3 +267,46 @@ class CloudflareRealtimeKitTests(APITestCase):
 
         with self.assertRaisesMessage(APIException, 'temporarily unreachable'):
             CloudflareRealtimeKitV1()._request('POST', '/meetings', {})
+
+    @override_settings(CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET='webinar_viewer')
+    def test_rejoining_viewer_is_upgraded_before_token_refresh(self):
+        provider = CloudflareRealtimeKitV1()
+        provider.ensure_meeting = Mock(return_value='room')
+        provider._request = Mock(side_effect=[{}, {'token': 'fresh-token'}])
+        user = Mock(username='student', pk=2)
+        user.get_full_name.return_value = ''
+        result = provider.participant_token(Mock(pk=1), user, 'learner', 'saved-student')
+        self.assertEqual(result, ('saved-student', 'fresh-token'))
+        self.assertEqual(provider._request.call_args_list[0].args, (
+            'PATCH', '/meetings/room/participants/saved-student',
+            {'name': 'student', 'preset_name': 'group_call_participant'},
+        ))
+        self.assertEqual(provider._request.call_args_list[1].args[1],
+                         '/meetings/room/participants/saved-student/token')
+
+    def test_permission_failure_does_not_create_duplicate_participants(self):
+        provider = CloudflareRealtimeKitV1()
+        provider.ensure_meeting = Mock(return_value='room')
+        provider._request = Mock(side_effect=ProviderConfigurationError())
+        user = Mock(username='student', pk=2)
+        user.get_full_name.return_value = ''
+        with self.assertRaises(ProviderConfigurationError):
+            provider.participant_token(Mock(pk=1), user, 'learner', 'saved-student')
+        self.assertEqual(provider._request.call_count, 1)
+
+    def test_deleted_participant_is_replaced(self):
+        provider = CloudflareRealtimeKitV1()
+        provider.ensure_meeting = Mock(return_value='room')
+        provider._request = Mock(side_effect=[
+            ProviderResourceNotFound(), {'id': 'replacement', 'token': 'new-token'},
+        ])
+        user = Mock(username='student', pk=2)
+        user.get_full_name.return_value = ''
+        self.assertEqual(provider.participant_token(Mock(pk=1), user, 'learner', 'deleted'),
+                         ('replacement', 'new-token'))
+        self.assertEqual(provider._request.call_args.args[1], '/meetings/room/participants')
+
+    @override_settings(CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET='custom_classroom_student')
+    def test_custom_presets_are_preserved(self):
+        self.assertEqual(CloudflareRealtimeKitV1().participant_preset('learner'),
+                         'custom_classroom_student')

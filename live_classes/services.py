@@ -7,7 +7,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
-from .models import LiveClassPayment, LiveClassRegistration
+from .models import LiveClass, LiveClassPayment, LiveClassRegistration
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 class ProviderConfigurationError(APIException):
     status_code = 503
     default_detail = 'The live classroom provider is not configured.'
+
+
+class ProviderResourceNotFound(APIException):
+    status_code = 502
+    default_detail = 'The classroom provider could not find the requested resource. Please contact support.'
 
 
 class CloudflareRealtimeKitV1:
@@ -73,9 +78,7 @@ class CloudflareRealtimeKitV1:
                     'The live classroom provider is not authorized to create classrooms. Please contact support.'
                 )
             if response.status_code == 404:
-                raise ProviderConfigurationError(
-                    'The live classroom provider account or app is configured incorrectly. Please contact support.'
-                )
+                raise ProviderResourceNotFound()
             raise APIException('Cloudflare rejected the classroom request. Please try again.')
         if not body.get('success', True):
             logger.error('Cloudflare RealtimeKit request was unsuccessful (path=%s, errors=%s)', path, body.get('errors'))
@@ -104,12 +107,44 @@ class CloudflareRealtimeKitV1:
         return live_class.cloudflare_meeting_id
 
     def ensure_meeting(self, live_class):
-        return live_class.cloudflare_meeting_id or self.create_meeting(live_class)
+        # Two first-time joins must never create different rooms for one class.
+        # Read the identity again under a database lock, even for stale callers.
+        with transaction.atomic():
+            locked_class = LiveClass.objects.select_for_update().get(pk=live_class.pk)
+            meeting_id = locked_class.cloudflare_meeting_id or self.create_meeting(locked_class)
+        live_class.cloudflare_meeting_id = meeting_id
+        return meeting_id
+
+    def participant_preset(self, role):
+        preset = (
+            settings.CLOUDFLARE_REALTIMEKIT_INSTRUCTOR_PRESET
+            if role == 'host'
+            else settings.CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET
+        )
+        # Existing deployments still have the old webinar defaults in their env.
+        # Both roles must use GROUP_CALL for an interactive classroom; custom
+        # preset names remain supported and must have matching media permissions.
+        return {
+            'webinar_presenter': 'group_call_host',
+            'webinar_viewer': 'group_call_participant',
+        }.get(preset, preset)
 
     def participant_token(self, live_class, user, role, participant_id=''):
         meeting_id = self.ensure_meeting(live_class)
+        full_name = user.get_full_name().strip() or user.username
+        preset = self.participant_preset(role)
         if participant_id:
             try:
+                # Refreshing a token alone preserves the old viewer permissions.
+                # Apply the current role before issuing a fresh token on rejoin.
+                self._request(
+                    'PATCH',
+                    f'/meetings/{meeting_id}/participants/{participant_id}',
+                    {'name': full_name, 'preset_name': preset},
+                )
+            except ProviderResourceNotFound:
+                logger.info('Saved classroom participant no longer exists; creating a replacement')
+            else:
                 data = self._request(
                     'POST',
                     f'/meetings/{meeting_id}/participants/{participant_id}/token',
@@ -118,20 +153,14 @@ class CloudflareRealtimeKitV1:
                 token = data.get('token') or data.get('authToken')
                 if token:
                     return participant_id, token
-            except APIException:
-                logger.info('Refreshing participant failed; creating a replacement participant')
+                raise APIException('Cloudflare did not return a classroom token.')
 
-        full_name = user.get_full_name().strip() or user.username
         data = self._request(
             'POST',
             f'/meetings/{meeting_id}/participants',
             {
                 'name': full_name,
-                'preset_name': (
-                    settings.CLOUDFLARE_REALTIMEKIT_INSTRUCTOR_PRESET
-                    if role == 'host'
-                    else settings.CLOUDFLARE_REALTIMEKIT_STUDENT_PRESET
-                ),
+                'preset_name': preset,
                 'custom_participant_id': f'ed3hub-{live_class.pk}-{user.pk}-{uuid.uuid4().hex[:10]}',
             },
         )
