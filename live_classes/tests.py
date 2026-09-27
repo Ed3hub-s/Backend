@@ -65,15 +65,18 @@ class LiveClassAPITests(APITestCase):
     @override_settings(PAYSTACK_SECRET_KEY='test-secret')
     @patch('live_classes.services.requests.post')
     def test_paid_registration_stays_pending_until_verified(self, mocked_post):
-        mocked_post.return_value = Mock(
+        mocked_post.side_effect = lambda *args, **kwargs: Mock(
             raise_for_status=Mock(),
-            json=Mock(return_value={'status': True, 'data': {'authorization_url': 'https://checkout.test', 'reference': 'ref'}}),
+            json=Mock(return_value={'status': True, 'data': {
+                'authorization_url': 'https://checkout.paystack.com/test',
+                'reference': kwargs['json']['reference'],
+            }}),
         )
         live_class = self.make_class('paid', Decimal('2500.00'))
         self.client.force_authenticate(self.learner)
         response = self.client.post(f'/api/live-classes/{live_class.slug}/register/')
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data['checkout']['authorization_url'], 'https://checkout.test')
+        self.assertEqual(response.data['checkout']['authorization_url'], 'https://checkout.paystack.com/test')
         registration = LiveClassRegistration.objects.get(live_class=live_class, learner=self.learner)
         self.assertEqual(registration.access_status, 'pending')
         self.assertEqual(registration.payment.status, 'pending')
@@ -91,7 +94,10 @@ class LiveClassAPITests(APITestCase):
         LiveClassRegistration.objects.create(live_class=live_class, learner=self.learner, payment=payment)
         mocked_get.return_value = Mock(
             raise_for_status=Mock(),
-            json=Mock(return_value={'status': True, 'data': {'status': 'success', 'amount': 250000}}),
+            json=Mock(return_value={'status': True, 'data': {
+                'status': 'success', 'amount': 250000, 'currency': 'NGN',
+                'reference': payment.transaction_reference, 'customer': {'email': self.learner.email},
+            }}),
         )
         self.client.force_authenticate(self.learner)
         response = self.client.post(
@@ -223,7 +229,10 @@ class LiveClassAPITests(APITestCase):
         )
         mocked_get.return_value = Mock(
             raise_for_status=Mock(),
-            json=Mock(return_value={'status': True, 'data': {'status': 'success', 'amount': 250000}}),
+            json=Mock(return_value={'status': True, 'data': {
+                'status': 'success', 'amount': 250000, 'currency': 'NGN',
+                'reference': payment.transaction_reference, 'customer': {'email': self.learner.email},
+            }}),
         )
         payload = json.dumps({'event': 'charge.success', 'data': {'reference': payment.transaction_reference}}).encode()
         signature = hmac.new(b'test-secret', payload, hashlib.sha512).hexdigest()

@@ -1,5 +1,6 @@
 import logging
 import uuid
+from urllib.parse import quote, urlsplit
 
 import requests
 from django.conf import settings
@@ -170,18 +171,22 @@ class CloudflareRealtimeKitV1:
         return str(data['id']), token
 
 
-def _initialize_paystack(user, live_class, reference):
+def _initialize_paystack(user, live_class, payment):
     if not settings.PAYSTACK_SECRET_KEY:
         raise ProviderConfigurationError('Paystack is not configured for paid live classes.')
+    checkout = payment.metadata.get('checkout')
+    if checkout:
+        return checkout
+    reference = payment.transaction_reference
     callback_url = f"{settings.FRONTEND_URL.rstrip('/')}/live-classes/{live_class.slug}?payment=verify"
     try:
         response = requests.post(
             'https://api.paystack.co/transaction/initialize',
             headers={'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}'},
             json={
-                'email': user.email,
-                'amount': int(live_class.price * 100),
-                'currency': live_class.currency,
+                'email': payment.metadata.get('customer_email', user.email),
+                'amount': int(payment.amount * 100),
+                'currency': payment.currency,
                 'reference': reference,
                 'callback_url': callback_url,
                 'metadata': {'live_class_id': live_class.id, 'user_id': user.id},
@@ -192,31 +197,39 @@ def _initialize_paystack(user, live_class, reference):
         body = response.json()
     except (requests.RequestException, ValueError) as exc:
         raise APIException('Payment checkout could not be started. Please try again.') from exc
-    if not body.get('status'):
-        raise APIException(body.get('message', 'Paystack rejected the payment request.'))
-    return body['data']
+    data = body.get('data') if isinstance(body, dict) else None
+    if not isinstance(data, dict) or body.get('status') is not True:
+        raise APIException('Paystack could not start checkout. Please try again.')
+    url = urlsplit(data.get('authorization_url') or '')
+    if data.get('reference') != reference or url.scheme != 'https' or url.hostname != 'checkout.paystack.com':
+        raise APIException('Paystack returned an invalid checkout. Please contact support.')
+    checkout = {'authorization_url': data['authorization_url'], 'reference': reference}
+    payment.metadata = {**payment.metadata, 'checkout': checkout}
+    payment.save(update_fields=('metadata', 'updated_at'))
+    return checkout
 
 
 @transaction.atomic
 def register_for_live_class(live_class, learner):
     locked_class = type(live_class).objects.select_for_update().get(pk=live_class.pk)
     existing = LiveClassRegistration.objects.filter(live_class=locked_class, learner=learner).first()
+    if locked_class.educator_id == learner.id:
+        raise ValidationError('Educators do not register for their own class.')
+    if existing and existing.access_status == 'active':
+        return existing, None, False
+    if locked_class.status not in ('published', 'live') or locked_class.ends_at <= timezone.now():
+        raise ValidationError('This live class is not open for registration.')
     if existing:
-        if existing.access_status == 'active':
-            return existing, None, False
         if existing.access_status not in ('pending',):
             raise ValidationError('This registration is no longer eligible for activation.')
         if existing.payment and existing.payment.status == 'pending':
-            checkout = _initialize_paystack(learner, locked_class, existing.payment.transaction_reference)
+            checkout = _initialize_paystack(learner, locked_class, existing.payment)
             return existing, checkout, False
+        raise ValidationError('This registration requires support before another payment can be started.')
 
     active_count = locked_class.registrations.filter(access_status__in=('active', 'pending')).count()
     if active_count >= locked_class.capacity:
         raise ValidationError('This live class is full.')
-    if locked_class.status != 'published' or locked_class.ends_at <= timezone.now():
-        raise ValidationError('This live class is not open for registration.')
-    if locked_class.educator_id == learner.id:
-        raise ValidationError('Educators do not register for their own class.')
 
     if locked_class.access_type == 'free':
         registration = LiveClassRegistration.objects.create(
@@ -233,31 +246,35 @@ def register_for_live_class(live_class, learner):
         amount=locked_class.price,
         currency=locked_class.currency,
         transaction_reference=f'LC-{locked_class.pk}-{learner.pk}-{uuid.uuid4().hex[:16]}',
-        metadata={'live_class_id': locked_class.pk},
+        metadata={'live_class_id': locked_class.pk, 'customer_email': learner.email},
     )
     registration = LiveClassRegistration.objects.create(
         live_class=locked_class,
         learner=learner,
         payment=payment,
     )
-    checkout = _initialize_paystack(learner, locked_class, payment.transaction_reference)
+    checkout = _initialize_paystack(learner, locked_class, payment)
     return registration, checkout, True
 
 
 @transaction.atomic
 def verify_live_class_payment(registration, reference):
-    registration = LiveClassRegistration.objects.select_for_update().select_related('payment', 'live_class').get(
+    # Lock the registration first in both verification and refund handling. Avoid
+    # FOR UPDATE on the nullable payment join (unsupported by PostgreSQL).
+    registration = LiveClassRegistration.objects.select_for_update().get(
         pk=registration.pk
     )
     if not registration.payment or registration.payment.transaction_reference != reference:
         raise ValidationError('Payment reference does not match this registration.')
+    if registration.access_status in ('revoked', 'refunded', 'cancelled') or registration.payment.status == 'refunded':
+        return registration
     if registration.access_status == 'active' and registration.payment.status == 'successful':
         return registration
     if not settings.PAYSTACK_SECRET_KEY:
         raise ProviderConfigurationError('Paystack is not configured.')
     try:
         response = requests.get(
-            f'https://api.paystack.co/transaction/verify/{reference}',
+            f'https://api.paystack.co/transaction/verify/{quote(reference, safe="")}',
             headers={'Authorization': f'Bearer {settings.PAYSTACK_SECRET_KEY}'},
             timeout=15,
         )
@@ -265,19 +282,31 @@ def verify_live_class_payment(registration, reference):
         body = response.json()
     except (requests.RequestException, ValueError) as exc:
         raise APIException('Payment could not be verified. Please try again.') from exc
-    data = body.get('data') or {}
-    paid_amount = int(data.get('amount', 0))
-    if data.get('status') != 'success' or paid_amount != int(registration.live_class.price * 100):
-        raise ValidationError('Payment is not successful or the amount is incorrect.')
-
     payment = registration.payment
+    data = body.get('data') if isinstance(body, dict) else None
+    if not isinstance(data, dict) or body.get('status') is not True:
+        raise APIException('Paystack could not verify this payment. Please try again.')
+    customer = data.get('customer') or {}
+    expected_email = payment.metadata.get('customer_email', payment.user.email)
+    if (
+        data.get('status') != 'success'
+        or type(data.get('amount')) is not int
+        or data['amount'] != int(payment.amount * 100)
+        or data.get('currency') != payment.currency
+        or data.get('reference') != payment.transaction_reference
+        or not isinstance(customer, dict)
+        or str(customer.get('email', '')).casefold() != expected_email.casefold()
+    ):
+        raise ValidationError('Payment is not yet successful or does not match this booking. Please check payment again or contact support.')
+
     payment.status = 'successful'
     payment.paid_at = timezone.now()
-    payment.metadata = data
+    # Keep checkout/invoice information; do not store reusable card authorizations.
+    payment.metadata = {**payment.metadata, 'verified_transaction_id': data.get('id')}
     payment.save(update_fields=('status', 'paid_at', 'metadata', 'updated_at'))
     registration.registration_status = 'confirmed'
     registration.access_status = 'active'
-    registration.amount_paid = registration.live_class.price
+    registration.amount_paid = payment.amount
     registration.access_granted_at = timezone.now()
     registration.save(
         update_fields=('registration_status', 'access_status', 'amount_paid', 'access_granted_at')

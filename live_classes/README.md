@@ -50,6 +50,30 @@ Configure Paystack to send events to:
 
 The webhook is HMAC-SHA512 verified and reconciles successful payments and refunds. Run Celery worker and beat; `send_due_live_class_reminders` runs every five minutes and sends the 3-day, 1-day, 1-hour, and start-time reminders.
 
+Paid checkout uses the backend `PAYSTACK_SECRET_KEY`; a frontend public key is
+not needed for this hosted checkout flow. Set `FRONTEND_URL` to the deployed web
+app so Paystack returns students to the right class. Configure the webhook above
+in the matching Paystack test/live environment. The key must support the class's
+currency; USD/GHS/KES availability depends on the merchant account.
+
+Booking amount, currency, reference and customer email are recorded before
+checkout. Repeated checkout requests reuse the saved link. Callback and webhook
+verification both check those invoice values against Paystack's server response,
+and repeated successful callbacks are idempotent. A later class price change
+does not invalidate an already-issued invoice. Students can use **Check payment**
+to recover a payment if they close the checkout tab or miss the callback.
+
+Completed full refunds remove access; pending, processing, failed and partial
+refunds do not automatically remove access. Partial-refund access decisions need
+staff review. Refunded, revoked and cancelled bookings cannot be reactivated by
+a delayed success webhook. This integration collects payment into the configured
+merchant account; it does not implement teacher payout splits or initiate refunds.
+
+Before accepting live payments, use Paystack test keys and a test checkout to
+verify the redirect and webhook on the deployed domains. Local tests mock Paystack
+and never charge a card. Review Paystack's dashboard webhook delivery logs after
+deployment to confirm successful delivery.
+
 ## Local checks
 
 If production database values are present in `.env`, set `USE_SQLITE=True` for local tests:

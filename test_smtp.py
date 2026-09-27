@@ -6,10 +6,10 @@ import socket
 import smtplib
 import ssl
 
-HOST     = 'das121.truehost.cloud'
+HOST     = 'das125.truehost.cloud'
 USER     = 'ed3hub@ed3hub.name.ng'
 PASSWORD = 'EIFousk4J0jqN9R4'
-TO       = 'wisdomisaac168@gmail.com'
+TO       = 'marketpointa@gmail.com'
 
 CONFIGS = [
     {'port': 587,  'use_ssl': False, 'use_tls': True,  'label': '587/STARTTLS'},

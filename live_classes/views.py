@@ -140,14 +140,17 @@ class VerifyLiveClassPaymentView(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request, slug):
-        reference = request.data.get('reference', '').strip()
-        if not reference:
-            raise ValidationError({'reference': 'Payment reference is required.'})
         registration = get_object_or_404(
             LiveClassRegistration.objects.select_related('payment', 'live_class'),
             live_class__slug=slug,
             learner=request.user,
         )
+        reference = request.data.get('reference')
+        if reference is None:
+            reference = registration.payment.transaction_reference if registration.payment else ''
+        if not isinstance(reference, str) or not reference.strip():
+            raise ValidationError({'reference': 'Payment reference is required.'})
+        reference = reference.strip()
         registration = verify_live_class_payment(registration, reference)
         return Response(LiveClassRegistrationSerializer(registration).data)
 
@@ -172,20 +175,34 @@ class PaystackLiveClassWebhookView(APIView):
         except (UnicodeDecodeError, json.JSONDecodeError):
             return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not isinstance(event, dict) or not isinstance(event.get('data'), dict):
+            return Response({'detail': 'Invalid payload.'}, status=status.HTTP_400_BAD_REQUEST)
         event_name = event.get('event')
         event_data = event.get('data') or {}
-        transaction_data = event_data.get('transaction') or {}
-        reference = event_data.get('reference') or transaction_data.get('reference')
+        transaction_data = event_data.get('transaction')
+        transaction_data = transaction_data if isinstance(transaction_data, dict) else {}
+        reference = event_data.get('transaction_reference') or event_data.get('reference') or transaction_data.get('reference')
+        if not isinstance(reference, str):
+            return Response({'status': 'ignored'})
         payment = LiveClassPayment.objects.filter(transaction_reference=reference).select_related('registration').first()
-        if not payment:
+        if not payment or not hasattr(payment, 'registration'):
             return Response({'status': 'ignored'})
         if event_name == 'charge.success':
             verify_live_class_payment(payment.registration, reference)
-        elif event_name in ('refund.processed', 'refund.processing'):
+        elif event_name == 'refund.processed':
             with transaction.atomic():
+                registration = LiveClassRegistration.objects.select_for_update().get(pk=payment.registration.pk)
+                payment = registration.payment
+                # Processing/failed refunds are not completed refunds. A partial
+                # refund alone does not remove access to the entire class.
+                try:
+                    full_refund = int(event_data.get('amount', 0)) >= int(payment.amount * 100)
+                except (ValueError, TypeError):
+                    full_refund = False
+                if not full_refund or event_data.get('currency') != payment.currency:
+                    return Response({'status': 'ignored'})
                 payment.status = 'refunded'
                 payment.save(update_fields=('status', 'updated_at'))
-                registration = payment.registration
                 registration.access_status = 'refunded'
                 registration.save(update_fields=('access_status',))
         return Response({'status': 'ok'})
