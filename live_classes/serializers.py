@@ -1,5 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+from .services import authorize_classroom
 
 from courses.models import Course
 
@@ -28,6 +30,8 @@ class EducatorSummarySerializer(serializers.Serializer):
 
 
 class LiveClassListSerializer(serializers.ModelSerializer):
+    bundle_title = serializers.CharField(source='bundle.title', read_only=True)
+    bundle_price = serializers.DecimalField(source='bundle.price', max_digits=10, decimal_places=2, read_only=True)
     educator = EducatorSummarySerializer(read_only=True)
     registered_count = serializers.IntegerField(read_only=True)
     available_spaces = serializers.SerializerMethodField()
@@ -35,6 +39,7 @@ class LiveClassListSerializer(serializers.ModelSerializer):
     starts_at = serializers.DateTimeField(read_only=True)
     is_joinable = serializers.SerializerMethodField()
     viewer_access_status = serializers.SerializerMethodField()
+    eligible_for_bundle = serializers.SerializerMethodField()
 
     class Meta:
         model = LiveClass
@@ -43,7 +48,15 @@ class LiveClassListSerializer(serializers.ModelSerializer):
             'scheduled_date', 'scheduled_time', 'starts_at', 'duration_minutes',
             'capacity', 'registered_count', 'available_spaces', 'cover_image_url',
             'access_type', 'price', 'currency', 'status', 'recording_enabled',
-            'is_joinable', 'viewer_access_status',
+            'is_joinable', 'viewer_access_status', 'bundle', 'bundle_title', 'bundle_price', 'eligible_for_bundle',
+        )
+
+    def get_eligible_for_bundle(self, obj):
+        request = self.context.get('request')
+        return bool(
+            request and request.user.is_authenticated and obj.educator_id == request.user.pk
+            and not obj.bundle_id and obj.access_type == 'paid' and obj.status == 'published'
+            and obj.starts_at > timezone.now() and not obj.registrations.exists()
         )
 
     def get_available_spaces(self, obj):
@@ -70,27 +83,42 @@ class LiveClassListSerializer(serializers.ModelSerializer):
         )
         if registration is None:
             registration = obj.registrations.filter(learner=request.user).only('access_status').first()
+        if registration and registration.access_status == 'active':
+            try:
+                authorize_classroom(obj, request.user)
+            except PermissionDenied:
+                return 'pending'
         return registration.access_status if registration else None
+
+
+class BundleSessionSerializer(serializers.ModelSerializer):
+    starts_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = LiveClass
+        fields = ('id', 'slug', 'title', 'starts_at', 'duration_minutes', 'status')
 
 
 class LiveClassDetailSerializer(LiveClassListSerializer):
     course_title = serializers.CharField(source='course.title', read_only=True)
     recordings_available = serializers.SerializerMethodField()
+    bundle_sessions = BundleSessionSerializer(source='bundle.classes', many=True, read_only=True)
 
     class Meta(LiveClassListSerializer.Meta):
         fields = LiveClassListSerializer.Meta.fields + (
             'learning_objectives', 'requirements', 'course', 'course_title',
-            'recordings_available', 'created_at', 'updated_at',
+            'recordings_available', 'created_at', 'updated_at', 'bundle_sessions',
         )
 
     def get_recordings_available(self, obj):
         request = self.context.get('request')
         if not request or not request.user.is_authenticated:
             return False
-        authorized = obj.educator_id == request.user.id or obj.registrations.filter(
-            learner=request.user, access_status='active'
-        ).exists()
-        return authorized and obj.recordings.filter(status='available').exists()
+        try:
+            authorize_classroom(obj, request.user)
+        except PermissionDenied:
+            return False
+        return obj.recordings.filter(status='available').exists()
 
 
 class LiveClassWriteSerializer(serializers.ModelSerializer):
@@ -117,6 +145,10 @@ class LiveClassWriteSerializer(serializers.ModelSerializer):
         return course
 
     def validate(self, attrs):
+        if self.instance and self.instance.bundle_id:
+            for field in ('access_type', 'price', 'currency'):
+                if field in attrs and attrs[field] != getattr(self.instance, field):
+                    raise serializers.ValidationError('Bundled class pricing cannot be changed individually.')
         start_now = attrs.get('start_now', False)
         if start_now:
             now = timezone.localtime().replace(second=0, microsecond=0)

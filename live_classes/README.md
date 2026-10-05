@@ -44,6 +44,9 @@ Recordings are synchronized from Cloudflare when an authorized user requests the
 
 ## Payments and reminders
 
+See `../PAYMENT_ROLLOUT.md` for paid session bundles, recorded-course checkout,
+admin video review, historical enrollment reconciliation and deployment checks.
+
 Configure Paystack to send events to:
 
 `https://<api-host>/api/live-classes/webhooks/paystack/`

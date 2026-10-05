@@ -1,5 +1,6 @@
 from django.utils import timezone
 from rest_framework import serializers
+from .payments import has_course_access
 from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
     Assessment, CourseResource, Enrollment, LessonProgress,
@@ -48,10 +49,20 @@ class LessonSerializer(serializers.ModelSerializer):
         )
 
     def get_video_url(self, obj):
+        request = self.context.get('request')
+        if not (obj.is_free_preview and obj.module.course.is_published) and not has_course_access(obj.module.course, getattr(request, 'user', None)):
+            return None
         if obj.video_file:
             request = self.context.get('request')
             return request.build_absolute_uri(obj.video_file.url) if request else obj.video_file.url
         return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if not (instance.is_free_preview and instance.module.course.is_published) and not has_course_access(instance.module.course, getattr(request, 'user', None)):
+            data.update(content='', transcript='', quiz=None)
+        return data
 
 
 class AssessmentSerializer(serializers.ModelSerializer):
@@ -142,6 +153,17 @@ class CourseListSerializer(serializers.ModelSerializer):
 
 
 class CourseDetailSerializer(serializers.ModelSerializer):
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if not has_course_access(instance, getattr(request, 'user', None)):
+            data['resources'] = []
+            data['assessments'] = []
+            for module in data['modules']:
+                module['quiz'] = None
+                module['assessments'] = []
+        return data
+
     """Full serializer for detail view."""
     instructor_name = serializers.SerializerMethodField()
     average_rating = serializers.FloatField(read_only=True)

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -11,7 +12,20 @@ from django.utils.text import slugify
 from courses.models import Course
 
 
+class LiveClassBundle(models.Model):
+    educator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='live_class_bundles')
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    currency = models.CharField(max_length=3, default='NGN')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.title
+
+
 class LiveClass(models.Model):
+    bundle = models.ForeignKey(LiveClassBundle, on_delete=models.PROTECT, null=True, blank=True, related_name='classes')
     LEVELS = (
         ('beginner', 'Beginner'),
         ('intermediate', 'Intermediate'),
@@ -155,12 +169,12 @@ class LiveClassRegistration(models.Model):
         on_delete=models.CASCADE,
         related_name='live_class_registrations',
     )
-    payment = models.OneToOneField(
+    payment = models.ForeignKey(
         LiveClassPayment,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='registration',
+        related_name='registrations',
     )
     registration_status = models.CharField(max_length=12, choices=REGISTRATION_STATUSES, default='pending')
     access_status = models.CharField(max_length=12, choices=ACCESS_STATUSES, default='pending')

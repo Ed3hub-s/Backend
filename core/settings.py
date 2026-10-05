@@ -242,6 +242,7 @@ UNFOLD = {
                     {'title': 'Modules', 'icon': 'view_module', 'link': '/admin/courses/module/'},
                     {'title': 'Lessons', 'icon': 'play_lesson', 'link': '/admin/courses/lesson/'},
                     {'title': 'Enrollments', 'icon': 'how_to_reg', 'link': '/admin/courses/enrollment/'},
+                    {'title': 'Course Payments', 'icon': 'payments', 'link': '/admin/courses/coursepayment/'},
                     {'title': 'Certificates', 'icon': 'workspace_premium', 'link': '/admin/courses/certificate/'},
                     {'title': 'Reviews', 'icon': 'star', 'link': '/admin/courses/review/'},
                 ],
@@ -259,6 +260,7 @@ UNFOLD = {
                 'separator': True,
                 'items': [
                     {'title': 'Live Classes', 'icon': 'video_camera_front', 'link': '/admin/live_classes/liveclass/'},
+                    {'title': 'Class Bundles', 'icon': 'collections_bookmark', 'link': '/admin/live_classes/liveclassbundle/'},
                     {'title': 'Registrations', 'icon': 'how_to_reg', 'link': '/admin/live_classes/liveclassregistration/'},
                     {'title': 'Payments', 'icon': 'payments', 'link': '/admin/live_classes/liveclasspayment/'},
                     {'title': 'Attendance', 'icon': 'groups', 'link': '/admin/live_classes/liveclassattendance/'},

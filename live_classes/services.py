@@ -1,5 +1,6 @@
 import logging
 import uuid
+from decimal import Decimal
 from urllib.parse import quote, urlsplit
 
 import requests
@@ -8,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
-from .models import LiveClass, LiveClassPayment, LiveClassRegistration
+from .models import LiveClass, LiveClassBundle, LiveClassPayment, LiveClassRegistration
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,11 @@ def _initialize_paystack(user, live_class, payment):
                 'currency': payment.currency,
                 'reference': reference,
                 'callback_url': callback_url,
-                'metadata': {'live_class_id': live_class.id, 'user_id': user.id},
+                'metadata': {
+                    'live_class_id': live_class.id, 'user_id': user.id,
+                    'bundle_id': payment.metadata.get('bundle_id'),
+                    'class_ids': payment.metadata.get('class_ids', [live_class.id]),
+                },
             },
             timeout=15,
         )
@@ -211,11 +216,16 @@ def _initialize_paystack(user, live_class, payment):
 
 @transaction.atomic
 def register_for_live_class(live_class, learner):
+    if live_class.bundle_id:
+        return register_for_bundle(live_class, learner)
     locked_class = type(live_class).objects.select_for_update().get(pk=live_class.pk)
+    if locked_class.bundle_id:
+        raise ValidationError('This class was added to a bundle. Refresh and try again.')
     existing = LiveClassRegistration.objects.filter(live_class=locked_class, learner=learner).first()
     if locked_class.educator_id == learner.id:
         raise ValidationError('Educators do not register for their own class.')
     if existing and existing.access_status == 'active':
+        authorize_classroom(locked_class, learner)
         return existing, None, False
     if locked_class.status not in ('published', 'live') or locked_class.ends_at <= timezone.now():
         raise ValidationError('This live class is not open for registration.')
@@ -259,13 +269,15 @@ def register_for_live_class(live_class, learner):
 
 @transaction.atomic
 def verify_live_class_payment(registration, reference):
-    # Lock the registration first in both verification and refund handling. Avoid
-    # FOR UPDATE on the nullable payment join (unsupported by PostgreSQL).
+    if registration.payment_id:
+        LiveClassPayment.objects.select_for_update().get(pk=registration.payment_id)
     registration = LiveClassRegistration.objects.select_for_update().get(
         pk=registration.pk
     )
     if not registration.payment or registration.payment.transaction_reference != reference:
         raise ValidationError('Payment reference does not match this registration.')
+    if registration.payment.user_id != registration.learner_id:
+        raise ValidationError('Payment does not belong to this learner.')
     if registration.access_status in ('revoked', 'refunded', 'cancelled') or registration.payment.status == 'refunded':
         return registration
     if registration.access_status == 'active' and registration.payment.status == 'successful':
@@ -304,20 +316,63 @@ def verify_live_class_payment(registration, reference):
     # Keep checkout/invoice information; do not store reusable card authorizations.
     payment.metadata = {**payment.metadata, 'verified_transaction_id': data.get('id')}
     payment.save(update_fields=('status', 'paid_at', 'metadata', 'updated_at'))
-    registration.registration_status = 'confirmed'
-    registration.access_status = 'active'
-    registration.amount_paid = payment.amount
-    registration.access_granted_at = timezone.now()
-    registration.save(
-        update_fields=('registration_status', 'access_status', 'amount_paid', 'access_granted_at')
-    )
+    registrations = list(payment.registrations.select_for_update().order_by('live_class_id'))
+    # Allocate the invoice once across its sessions, preserving every cent. This
+    # keeps totals correct regardless of which session receives the callback.
+    share, remainder = divmod(int(payment.amount * 100), len(registrations))
+    for index, item in enumerate(registrations):
+        if item.access_status != 'pending' or item.learner_id != payment.user_id:
+            continue
+        item.registration_status = 'confirmed'
+        item.access_status = 'active'
+        item.access_granted_at = payment.paid_at
+        item.amount_paid = Decimal(share + (index < remainder)) / 100
+        item.save(update_fields=('registration_status', 'access_status', 'access_granted_at', 'amount_paid'))
+    registration.refresh_from_db()
     return registration
 
 
 def authorize_classroom(live_class, user):
     if live_class.educator_id == user.id:
         return 'host', None
-    registration = LiveClassRegistration.objects.filter(live_class=live_class, learner=user).first()
-    if not registration or registration.access_status != 'active':
+    registration = LiveClassRegistration.objects.select_related('payment').filter(live_class=live_class, learner=user).first()
+    if not registration or registration.access_status != 'active' or registration.registration_status != 'confirmed':
         raise PermissionDenied('An active live-class registration is required.')
+    if live_class.access_type == 'paid' or live_class.bundle_id or registration.payment_id:
+        if not registration.payment or registration.payment.status != 'successful' or registration.payment.user_id != user.pk:
+            raise PermissionDenied('A verified successful payment is required for every classroom visit.')
     return 'learner', registration
+
+
+@transaction.atomic
+def register_for_bundle(live_class, learner):
+    bundle = LiveClassBundle.objects.select_for_update().get(pk=live_class.bundle_id)
+    classes = list(bundle.classes.select_for_update().order_by('pk'))
+    if bundle.educator_id == learner.pk:
+        raise ValidationError('Educators do not register for their own bundle.')
+    if len(classes) < 2 or any(item.status not in ('published', 'live') or item.ends_at <= timezone.now() for item in classes):
+        raise ValidationError('All bundle sessions must be open for registration.')
+    registrations = list(LiveClassRegistration.objects.filter(live_class__in=classes, learner=learner).select_related('payment'))
+    if registrations:
+        if len(registrations) != len(classes) or len({item.payment_id for item in registrations}) != 1:
+            raise ValidationError('An existing booking conflicts with this bundle. Please contact support.')
+        selected = next(item for item in registrations if item.live_class_id == live_class.pk)
+        if all(item.access_status == 'active' for item in registrations):
+            authorize_classroom(live_class, learner)
+            return selected, None, False
+        if any(item.access_status != 'pending' for item in registrations) or not selected.payment or selected.payment.status != 'pending':
+            raise ValidationError('This bundle booking is no longer eligible for payment.')
+        return selected, _initialize_paystack(learner, live_class, selected.payment), False
+    for item in classes:
+        if item.registrations.filter(access_status__in=('active', 'pending')).count() >= item.capacity:
+            raise ValidationError(f'The bundle session {item.title} is full.')
+    payment = LiveClassPayment.objects.create(
+        user=learner, amount=bundle.price, currency=bundle.currency,
+        transaction_reference=f'BUNDLE-{bundle.pk}-{uuid.uuid4().hex}',
+        metadata={'bundle_id': bundle.pk, 'class_ids': [item.pk for item in classes], 'customer_email': learner.email},
+    )
+    for item in classes:
+        registration = LiveClassRegistration.objects.create(live_class=item, learner=learner, payment=payment)
+        if item.pk == live_class.pk:
+            selected = registration
+    return selected, _initialize_paystack(learner, live_class, payment), True

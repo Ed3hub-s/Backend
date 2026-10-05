@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     LiveClass,
+    LiveClassBundle,
     LiveClassAttendance,
     LiveClassPayment,
     LiveClassRecording,
@@ -27,6 +28,13 @@ class LiveClassRegistrationAdmin(admin.ModelAdmin):
 
 @admin.register(LiveClassPayment)
 class LiveClassPaymentAdmin(admin.ModelAdmin):
+    readonly_fields = tuple(field.name for field in LiveClassPayment._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
     list_display = ('transaction_reference', 'user', 'amount', 'currency', 'status', 'paid_at')
     list_filter = ('status', 'payment_provider')
     search_fields = ('transaction_reference', 'user__email')
@@ -35,3 +43,15 @@ class LiveClassPaymentAdmin(admin.ModelAdmin):
 admin.site.register(LiveClassAttendance)
 admin.site.register(LiveClassRecording)
 admin.site.register(LiveClassReminder)
+
+
+@admin.register(LiveClassBundle)
+class LiveClassBundleAdmin(admin.ModelAdmin):
+    list_display = ('title', 'educator', 'price', 'currency')
+    readonly_fields = tuple(field.name for field in LiveClassBundle._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

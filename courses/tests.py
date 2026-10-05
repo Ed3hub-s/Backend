@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 from decimal import Decimal
 
 from django.contrib.auth.models import User
@@ -311,7 +312,8 @@ class AffiliateCommissionTests(TestCase):
             is_published=True,
         )
 
-    def test_first_paid_enrollment_credits_marketer_once(self):
+    @patch('courses.payments.verify_payment')
+    def test_first_paid_enrollment_credits_marketer_once(self, verify):
         affiliate = AffiliateMarketer.objects.get(user=self.marketer)
         referral = AffiliateReferral.objects.create(
             marketer=self.marketer,
@@ -320,9 +322,13 @@ class AffiliateCommissionTests(TestCase):
         )
         credit_verified_referral_signup(self.learner)
 
+        from .models import CoursePayment
+        payment = CoursePayment.objects.create(course=self.course, learner=self.learner, reference='affiliate-purchase', amount=self.course.price, customer_email=self.learner.email)
+
         self.client.force_authenticate(self.learner)
-        response = self.client.post(f'/api/courses/{self.course.id}/enroll/')
-        self.assertEqual(response.status_code, 201)
+        response = self.client.post(f'/api/courses/{self.course.id}/enroll/', {'reference': payment.reference})
+        self.assertEqual(response.status_code, 200)
+        verify.assert_called_once()
 
         referral.refresh_from_db()
         wallet = MarketerWallet.objects.get(marketer=self.marketer)

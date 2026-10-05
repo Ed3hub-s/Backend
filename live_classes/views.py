@@ -1,3 +1,9 @@
+import hashlib
+import hmac
+import json
+
+from django.conf import settings
+from django.db import transaction
 from django.db.models import Count, Prefetch, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -29,7 +35,7 @@ from notifications.utils import NotificationService
 
 
 def live_class_queryset(request=None):
-    queryset = LiveClass.objects.select_related('educator', 'educator__profile', 'course').annotate(
+    queryset = LiveClass.objects.select_related('educator', 'educator__profile', 'course', 'bundle').annotate(
         registered_count=Count('registrations', filter=Q(registrations__access_status='active'))
     )
     if request and request.user.is_authenticated:
@@ -102,13 +108,24 @@ class EducatorLiveClassDetailView(generics.RetrieveUpdateDestroyAPIView):
     lookup_field = 'slug'
 
     def get_queryset(self):
-        return LiveClass.objects.filter(educator=self.request.user)
+        queryset = LiveClass.objects.filter(educator=self.request.user)
+        return queryset.select_for_update() if self.request.method in ('PUT', 'PATCH', 'DELETE') else queryset
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        return super().update(request, *args, **kwargs)
+
+    @transaction.atomic
+    def destroy(self, request, *args, **kwargs):
+        return super().destroy(request, *args, **kwargs)
 
     def perform_update(self, serializer):
         live_class = serializer.save()
         schedule_live_class_reminders(live_class)
 
     def perform_destroy(self, instance):
+        if instance.bundle_id:
+            raise ValidationError('Bundled classes cannot be deleted; cancel the session instead.')
         if instance.registrations.exists():
             raise ValidationError('Classes with registrations cannot be deleted; cancel the class instead.')
         instance.delete()
@@ -184,28 +201,40 @@ class PaystackLiveClassWebhookView(APIView):
         reference = event_data.get('transaction_reference') or event_data.get('reference') or transaction_data.get('reference')
         if not isinstance(reference, str):
             return Response({'status': 'ignored'})
-        payment = LiveClassPayment.objects.filter(transaction_reference=reference).select_related('registration').first()
-        if not payment or not hasattr(payment, 'registration'):
+        from courses.models import CoursePayment
+        from courses.payments import fulfill_course_payment, refund_course_payment
+
+        course_payment = CoursePayment.objects.filter(reference=reference).first()
+        if course_payment:
+            if event_name == 'charge.success':
+                if course_payment.status != 'refunded':
+                    fulfill_course_payment(course_payment)
+            elif event_name == 'refund.processed' and self.is_full_refund(event_data, course_payment):
+                refund_course_payment(course_payment)
+            return Response({'status': 'ok'})
+        payment = LiveClassPayment.objects.filter(transaction_reference=reference).first()
+        if not payment:
             return Response({'status': 'ignored'})
         if event_name == 'charge.success':
-            verify_live_class_payment(payment.registration, reference)
+            registration = payment.registrations.filter(access_status__in=('pending', 'active')).first()
+            if registration:
+                verify_live_class_payment(registration, reference)
         elif event_name == 'refund.processed':
             with transaction.atomic():
-                registration = LiveClassRegistration.objects.select_for_update().get(pk=payment.registration.pk)
-                payment = registration.payment
-                # Processing/failed refunds are not completed refunds. A partial
-                # refund alone does not remove access to the entire class.
-                try:
-                    full_refund = int(event_data.get('amount', 0)) >= int(payment.amount * 100)
-                except (ValueError, TypeError):
-                    full_refund = False
-                if not full_refund or event_data.get('currency') != payment.currency:
+                payment = LiveClassPayment.objects.select_for_update().get(pk=payment.pk)
+                if not self.is_full_refund(event_data, payment):
                     return Response({'status': 'ignored'})
                 payment.status = 'refunded'
                 payment.save(update_fields=('status', 'updated_at'))
-                registration.access_status = 'refunded'
-                registration.save(update_fields=('access_status',))
+                payment.registrations.update(access_status='refunded')
         return Response({'status': 'ok'})
+
+    @staticmethod
+    def is_full_refund(event_data, payment):
+        amount = event_data.get('amount')
+        if isinstance(amount, str) and amount.isdigit():
+            amount = int(amount)
+        return type(amount) is int and amount >= int(payment.amount * 100) and event_data.get('currency') == payment.currency
 
 
 class MyLiveClassesView(generics.ListAPIView):
@@ -322,9 +351,3 @@ class RecordingAccessView(APIView):
         if not playback_url:
             return Response({'detail': 'Recording is not ready.'}, status=status.HTTP_409_CONFLICT)
         return Response({'playback_url': playback_url})
-import hashlib
-import hmac
-import json
-
-from django.conf import settings
-from django.db import transaction

@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.utils.html import format_html
+from .models import CoursePayment
 from unfold.admin import ModelAdmin, TabularInline, StackedInline
 from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
@@ -18,15 +20,32 @@ class QuestionInline(StackedInline):
     extra = 2
 
 
+def lesson_video_preview(obj):
+    if not obj or not obj.video_file:
+        return 'No video uploaded.'
+    return format_html(
+        '<video controls preload="metadata" style="max-width:100%;width:480px" src="{}">'
+        'Your browser cannot play this video.</video><br><a href="{}" target="_blank" rel="noopener">Open video</a>',
+        obj.video_file.url, obj.video_file.url,
+    )
+
+
 class LessonInline(TabularInline):
     model = Lesson
     extra = 1
-    fields = ('title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'content', 'is_free_preview')
+    fields = ('title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'video_preview', 'content', 'is_free_preview')
+    readonly_fields = ('video_preview',)
+    show_change_link = True
+
+    @admin.display(description='Watch uploaded video')
+    def video_preview(self, obj):
+        return lesson_video_preview(obj)
 
 
 class ModuleInline(TabularInline):
     model = Module
     extra = 1
+    show_change_link = True
 
 
 @admin.register(Quiz)
@@ -110,10 +129,29 @@ class CategoryAdmin(ModelAdmin):
 
 @admin.register(Lesson)
 class LessonAdmin(ModelAdmin):
+    readonly_fields = ('video_preview',)
+    fields = ('module', 'title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'video_preview', 'content', 'transcript', 'is_free_preview')
+
+    @admin.display(description='Watch uploaded video')
+    def video_preview(self, obj):
+        return lesson_video_preview(obj)
     list_display = ('title', 'module', 'lesson_type', 'order', 'duration_minutes')
     list_filter = ('lesson_type',)
     search_fields = ('title', 'module__title')
-    fields = ('module', 'title', 'lesson_type', 'order', 'duration_minutes', 'video_file', 'content', 'transcript', 'is_free_preview')
+
+
+@admin.register(CoursePayment)
+class CoursePaymentAdmin(ModelAdmin):
+    list_display = ('reference', 'learner', 'course', 'amount', 'currency', 'status', 'paid_at')
+    list_filter = ('status', 'currency')
+    search_fields = ('reference', 'learner__email', 'course__title')
+    readonly_fields = tuple(field.name for field in CoursePayment._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Assessment)

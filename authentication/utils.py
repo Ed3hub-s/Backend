@@ -249,12 +249,12 @@ def credit_verified_referral_signup(user):
         return referral
 
 
-def credit_first_purchase_commission(user, course):
+def credit_first_purchase_commission(user, course, paid_amount=None):
     if not course or course.is_free:
         return None
 
     try:
-        price = Decimal(str(course.price)).quantize(Decimal('0.01'))
+        price = Decimal(str(course.price if paid_amount is None else paid_amount)).quantize(Decimal('0.01'))
     except (InvalidOperation, TypeError):
         return None
     if price <= 0:

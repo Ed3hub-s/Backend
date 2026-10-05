@@ -194,7 +194,21 @@ class CourseResource(models.Model):
         return f'{self.course.title} — {self.title}'
 
 
+class CoursePayment(models.Model):
+    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name='payments')
+    learner = models.ForeignKey(User, on_delete=models.PROTECT, related_name='course_payments')
+    reference = models.CharField(max_length=120, unique=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    currency = models.CharField(max_length=3, default='NGN')
+    customer_email = models.EmailField()
+    status = models.CharField(max_length=12, default='pending', choices=(('pending', 'Pending'), ('successful', 'Successful'), ('refunded', 'Refunded')))
+    checkout = models.JSONField(default=dict, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class Enrollment(models.Model):
+    payment = models.OneToOneField(CoursePayment, on_delete=models.PROTECT, null=True, blank=True, related_name='enrollment')
     learner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='enrollments')
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='enrollments')
     enrolled_at = models.DateTimeField(auto_now_add=True)

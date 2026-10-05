@@ -1,5 +1,6 @@
 from django.utils import timezone
 from django.db import transaction as db_transaction
+from django.db.models import Q, F
 from rest_framework import status, generics, filters, parsers
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -8,6 +9,7 @@ import json
 import re
 
 from authentication.utils import credit_first_purchase_commission
+from .payments import purchase_course, require_course_access
 from analytics.models import AnalyticsEvent
 from analytics.services import track_event
 from .models import (
@@ -674,6 +676,7 @@ class EnrolledCourseDetailView(generics.RetrieveAPIView):
         if not enrollment:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('You are not enrolled in this course.')
+        require_course_access(enrollment.course, self.request.user)
         return Course.objects.prefetch_related(
             'modules__lessons__quiz__questions__choices',
             'modules__assessments',
@@ -719,6 +722,12 @@ class LessonDetailView(generics.RetrieveAPIView):
     serializer_class = LessonSerializer
     permission_classes = (IsAuthenticated,)
 
+    def get_object(self):
+        lesson = super().get_object()
+        if not (lesson.is_free_preview and lesson.module.course.is_published):
+            require_course_access(lesson.module.course, self.request.user)
+        return lesson
+
     def get_serializer_context(self):
         return {'request': self.request}
 
@@ -734,32 +743,11 @@ class EnrollView(APIView):
         except Course.DoesNotExist:
             return Response({'detail': 'Course not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Free courses enroll directly — skip payment verification for now
-        # TODO: Enable Paystack verification when PAYSTACK_SECRET_KEY is configured
-        pass
-
-        enrollment, created = Enrollment.objects.get_or_create(learner=request.user, course=course)
+        enrollment, checkout, created = purchase_course(course, request.user, request.data.get('reference'))
+        if checkout:
+            return Response({'checkout': checkout}, status=status.HTTP_202_ACCEPTED)
         if not created:
-            return Response({'detail': 'Already enrolled.'}, status=status.HTTP_200_OK)
-
-        # Credit educator wallet with 60% of course price
-        if not course.is_free and course.price > 0:
-            from decimal import Decimal
-            from django.db import transaction as db_transaction
-            educator_share = (course.price * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
-            with db_transaction.atomic():
-                wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=course.instructor)
-                wallet.balance = Decimal(str(wallet.balance)) + educator_share
-                wallet.total_earned = Decimal(str(wallet.total_earned)) + educator_share
-                wallet.save()
-                EducatorTransaction.objects.create(
-                    wallet=wallet,
-                    amount=educator_share,
-                    transaction_type='credit',
-                    description=f'60% share from {request.user.username} enrolling in "{course.title}"',
-                    course=course,
-                )
-            credit_first_purchase_commission(request.user, course)
+            return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_200_OK)
 
         track_event(
             request,
@@ -778,6 +766,8 @@ class MyEnrollmentsView(generics.ListAPIView):
     def get_queryset(self):
         return Enrollment.objects.filter(
             learner=self.request.user
+        ).filter(
+            Q(course__is_free=True) | Q(payment__status='successful', payment__learner=self.request.user, payment__course_id=F('course_id'))
         ).select_related(
             'course__instructor', 'course__category'
         ).prefetch_related('lesson_progress')
@@ -795,6 +785,7 @@ class CompleteLessonView(APIView):
         except (Lesson.DoesNotExist, Enrollment.DoesNotExist):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        require_course_access(enrollment.course, request.user)
         lp, _ = LessonProgress.objects.get_or_create(enrollment=enrollment, lesson=lesson)
         was_not_started = not LessonProgress.objects.filter(enrollment=enrollment, completed=True).exists()
         if not lp.completed:
@@ -839,6 +830,7 @@ class CompleteModuleView(APIView):
         except (Module.DoesNotExist, Enrollment.DoesNotExist):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        require_course_access(enrollment.course, request.user)
         mp, created = ModuleProgress.objects.get_or_create(enrollment=enrollment, module=module)
 
         if mp.completed and mp.reward_claimed:
@@ -956,7 +948,7 @@ class ModuleCreateView(APIView):
             return Response({'detail': 'Not found.'}, status=404)
         order = Module.objects.filter(course=course).count() + 1
         module = Module.objects.create(course=course, title=request.data.get('title', ''), order=order)
-        return Response(ModuleSerializer(module).data, status=201)
+        return Response(ModuleSerializer(module, context={'request': request}).data, status=201)
 
 
 class ModuleUpdateView(APIView):
@@ -969,7 +961,7 @@ class ModuleUpdateView(APIView):
             return Response({'detail': 'Not found.'}, status=404)
         module.title = request.data.get('title', module.title)
         module.save()
-        return Response(ModuleSerializer(module).data)
+        return Response(ModuleSerializer(module, context={'request': request}).data)
 
     def delete(self, request, module_id):
         try:
@@ -1014,6 +1006,8 @@ class LessonUpdateView(APIView):
             lesson = Lesson.objects.select_related('module__course').prefetch_related('quiz__questions__choices').get(id=lesson_id)
         except Lesson.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
+        if not (lesson.is_free_preview and lesson.module.course.is_published):
+            require_course_access(lesson.module.course, request.user)
         return Response(LessonSerializer(lesson, context={'request': request}).data)
 
     def patch(self, request, lesson_id):
@@ -1174,7 +1168,7 @@ class CourseContentView(APIView):
         modules = Module.objects.filter(course=course).prefetch_related('lessons__quiz__questions__choices')
         assessments = Assessment.objects.filter(course=course)
         return Response({
-            'modules': ModuleSerializer(modules, many=True).data,
+            'modules': ModuleSerializer(modules, many=True, context={'request': request}).data,
             'assessments': AssessmentSerializer(assessments, many=True).data,
         })
 

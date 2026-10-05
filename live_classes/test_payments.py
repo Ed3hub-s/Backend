@@ -9,7 +9,7 @@ from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
-from .models import LiveClass, LiveClassPayment, LiveClassRegistration
+from .models import LiveClass, LiveClassPayment, LiveClassRecording, LiveClassRegistration
 
 
 @override_settings(PAYSTACK_SECRET_KEY='test-secret', PASSWORD_HASHERS=['django.contrib.auth.hashers.MD5PasswordHasher'])
@@ -145,3 +145,36 @@ class PaidClassTests(APITestCase):
         self.registration.refresh_from_db()
         self.assertEqual(self.registration.access_status, 'revoked')
         get.assert_not_called()
+
+    @patch('live_classes.services.requests.get')
+    def test_verification_rejects_payment_owned_by_another_learner(self, get):
+        self.payment.user = self.teacher
+        self.payment.save(update_fields=['user'])
+        self.assertEqual(self.client.post(self.base + '/verify-payment/', {}, format='json').status_code, 400)
+        get.assert_not_called()
+
+    @patch('live_classes.views.CloudflareRealtimeKitV1')
+    def test_every_join_and_recording_request_rechecks_database(self, provider):
+        self.payment.status = 'successful'
+        self.payment.save()
+        self.registration.registration_status = 'confirmed'
+        self.registration.access_status = 'active'
+        self.registration.save()
+        provider.return_value.participant_token.return_value = ('participant', 'token')
+        provider.return_value.get_recording.return_value = {'download_url': 'https://example.com/recording.mp4'}
+        recording = LiveClassRecording.objects.create(
+            live_class=self.live_class, provider_recording_id='replay', status='available',
+        )
+        playback = f'/api/live-classes/recordings/{recording.pk}/access/'
+        self.assertEqual(self.client.post(self.base + '/join/').status_code, 200)
+        self.assertEqual(self.client.get(playback).status_code, 200)
+        # Change only the payment: a stale active registration must not grant access.
+        for changes in ({'status': 'pending'}, {'status': 'failed'}, {'status': 'refunded'},
+                        {'status': 'successful', 'user': self.teacher}):
+            with self.subTest(changes=changes):
+                LiveClassPayment.objects.filter(pk=self.payment.pk).update(**changes)
+                provider.reset_mock()
+                self.assertEqual(self.client.post(self.base + '/join/').status_code, 403)
+                self.assertEqual(self.client.get(playback).status_code, 403)
+                self.assertEqual(self.client.get(self.base + '/recordings/').status_code, 403)
+                provider.assert_not_called()
