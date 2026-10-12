@@ -1,5 +1,5 @@
 from django.urls import path
-from .bundles import BundleListView, EducatorBundleView
+from .bundles import BundleListView, EducatorBundleView, EducatorProgramCreateView
 
 from .views import (
     EducatorLiveClassAnalyticsView,
@@ -20,6 +20,7 @@ from .views import (
 urlpatterns = [
     path('bundles/', BundleListView.as_view(), name='live-class-bundles'),
     path('educator/bundles/', EducatorBundleView.as_view(), name='educator-live-class-bundles'),
+    path('educator/programs/', EducatorProgramCreateView.as_view(), name='educator-live-class-programs'),
     path('', LiveClassMarketplaceView.as_view(), name='live-class-marketplace'),
     path('mine/', MyLiveClassesView.as_view(), name='my-live-classes'),
     path('educator/', EducatorLiveClassListCreateView.as_view(), name='educator-live-classes'),

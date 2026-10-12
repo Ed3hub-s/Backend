@@ -36,7 +36,8 @@ from notifications.utils import NotificationService
 
 def live_class_queryset(request=None):
     queryset = LiveClass.objects.select_related('educator', 'educator__profile', 'course', 'bundle').annotate(
-        registered_count=Count('registrations', filter=Q(registrations__access_status='active'))
+        registered_count=Count('registrations', filter=Q(registrations__access_status='active'), distinct=True),
+        bundle_session_count=Count('bundle__classes', distinct=True),
     )
     if request and request.user.is_authenticated:
         queryset = queryset.prefetch_related(

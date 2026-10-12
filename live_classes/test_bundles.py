@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
 from django.test import override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from django.db.models import Sum
 from rest_framework.test import APITestCase
@@ -171,3 +172,36 @@ class BundlePaymentTests(APITestCase):
         by_id = {item['id']: item for item in response.data}
         self.assertFalse(by_id[self.classes[0].pk]['eligible_for_bundle'])
         self.assertTrue(by_id[self.classes[1].pk]['eligible_for_bundle'])
+
+    def test_educator_can_create_program_and_all_sessions_together(self):
+        starts = timezone.localtime() + timedelta(days=2)
+        sessions = [
+            {'title': 'Power BI foundations', 'scheduled_date': starts.date().isoformat(), 'scheduled_time': starts.time().strftime('%H:%M'), 'duration_minutes': 60},
+            {'title': 'Power BI dashboards', 'scheduled_date': (starts + timedelta(days=1)).date().isoformat(), 'scheduled_time': starts.time().strftime('%H:%M'), 'duration_minutes': 90},
+        ]
+        cover = SimpleUploadedFile('programme.png', b'programme-cover', content_type='image/png')
+        response = self.client.post('/api/live-classes/educator/programs/', {
+            'title': 'Power BI programme', 'description': 'Two guided sessions', 'category': 'Data',
+            'level': 'beginner', 'learning_objectives': 'Build a dashboard', 'requirements': 'Power BI Desktop',
+            'price': '15000', 'currency': 'NGN', 'capacity': '25', 'recording_enabled': 'true',
+            'sessions': json.dumps(sessions), 'cover_image': cover,
+        }, format='multipart')
+        self.assertEqual(response.status_code, 201, response.data)
+        bundle = LiveClassBundle.objects.get(title='Power BI programme')
+        self.assertEqual(bundle.classes.count(), 2)
+        self.assertEqual(list(bundle.classes.values_list('title', flat=True)), ['Power BI foundations', 'Power BI dashboards'])
+        self.assertTrue(all(item.access_type == 'paid' and item.price == bundle.price for item in bundle.classes.all()))
+        self.assertEqual(sum(item.reminders.count() for item in bundle.classes.all()), 6)
+
+    def test_program_creation_is_atomic_when_one_session_is_invalid(self):
+        starts = timezone.localtime() + timedelta(days=2)
+        response = self.client.post('/api/live-classes/educator/programs/', {
+            'title': 'Invalid programme', 'description': 'Should roll back', 'category': 'Data',
+            'level': 'beginner', 'learning_objectives': 'Learn', 'price': '5000', 'currency': 'NGN',
+            'capacity': '10', 'sessions': json.dumps([
+                {'title': 'Valid', 'scheduled_date': starts.date().isoformat(), 'scheduled_time': starts.time().strftime('%H:%M'), 'duration_minutes': 60},
+                {'title': '', 'scheduled_date': starts.date().isoformat(), 'scheduled_time': starts.time().strftime('%H:%M'), 'duration_minutes': 60},
+            ]), 'cover_image': SimpleUploadedFile('programme.png', b'not-a-real-image', content_type='image/png'),
+        }, format='multipart')
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(LiveClassBundle.objects.filter(title='Invalid programme').exists())

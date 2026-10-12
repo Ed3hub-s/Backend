@@ -40,6 +40,7 @@ class LiveClassListSerializer(serializers.ModelSerializer):
     is_joinable = serializers.SerializerMethodField()
     viewer_access_status = serializers.SerializerMethodField()
     eligible_for_bundle = serializers.SerializerMethodField()
+    bundle_session_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = LiveClass
@@ -48,7 +49,7 @@ class LiveClassListSerializer(serializers.ModelSerializer):
             'scheduled_date', 'scheduled_time', 'starts_at', 'duration_minutes',
             'capacity', 'registered_count', 'available_spaces', 'cover_image_url',
             'access_type', 'price', 'currency', 'status', 'recording_enabled',
-            'is_joinable', 'viewer_access_status', 'bundle', 'bundle_title', 'bundle_price', 'eligible_for_bundle',
+            'is_joinable', 'viewer_access_status', 'bundle', 'bundle_title', 'bundle_price', 'bundle_session_count', 'eligible_for_bundle',
         )
 
     def get_eligible_for_bundle(self, obj):
