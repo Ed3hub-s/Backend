@@ -39,15 +39,23 @@ class CoursePaymentTests(APITestCase):
 
     @patch('core.payments.requests.request')
     def test_checkout_uses_server_price_and_account_email_without_enrolling(self, request):
-        request.return_value = Mock(raise_for_status=Mock(), json=Mock(return_value={'status': True, 'data': {'reference': self.payment.reference, 'authorization_url': 'https://checkout.paystack.com/example'}}))
+        def initialize(*args, **kwargs):
+            reference = kwargs['json']['reference']
+            return Mock(raise_for_status=Mock(), json=Mock(return_value={'status': True, 'data': {'reference': reference, 'authorization_url': f'https://checkout.paystack.com/{reference}'}}))
+
+        request.side_effect = initialize
         response = self.client.post(self.endpoint, {'amount': 1, 'email': 'attacker@example.com'}, format='json')
         self.assertEqual(response.status_code, 202)
         self.assertFalse(Enrollment.objects.exists())
         self.assertFalse(EducatorTransaction.objects.exists())
         self.assertEqual(request.call_args.kwargs['json']['amount'], 10000)
         self.assertEqual(request.call_args.kwargs['json']['email'], self.learner.email)
-        self.client.post(self.endpoint)
-        self.assertEqual(request.call_count, 1)
+        first_checkout = response.data['checkout']
+        response = self.client.post(self.endpoint)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(request.call_count, 2)
+        self.assertNotEqual(first_checkout['reference'], response.data['checkout']['reference'])
+        self.assertNotEqual(first_checkout['authorization_url'], response.data['checkout']['authorization_url'])
 
     @patch('core.payments.requests.request')
     def test_verification_is_idempotent_and_credits_only_once(self, request):

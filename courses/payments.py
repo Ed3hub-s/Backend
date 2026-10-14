@@ -47,12 +47,15 @@ def purchase_course(course, learner, reference=None):
     enrollment = Enrollment.objects.filter(course=course, learner=learner, payment__status='successful').first()
     if enrollment:
         return enrollment, None, False
-    payment = CoursePayment.objects.filter(course=course, learner=learner, status='pending').first()
-    if not payment:
-        payment = CoursePayment.objects.create(
-            course=course, learner=learner, amount=course.price,
-            customer_email=learner.email, reference=f'COURSE-{uuid.uuid4().hex}',
-        )
+    # Paystack authorization URLs are transaction-specific and may no longer be
+    # usable after they have been opened, abandoned, or completed.  Reusing a
+    # stored pending checkout therefore strands a learner on Paystack's
+    # "link is incorrect or transaction is already completed" page.  Every
+    # explicit checkout attempt gets its own immutable payment reference.
+    payment = CoursePayment.objects.create(
+        course=course, learner=learner, amount=course.price,
+        customer_email=learner.email, reference=f'COURSE-{uuid.uuid4().hex}',
+    )
     frontend_url = settings.FRONTEND_URL.rstrip('/')
     callback = f'{frontend_url}/courses/payment-return?course_id={course.pk}'
     return None, initialize_payment(payment, callback), False
