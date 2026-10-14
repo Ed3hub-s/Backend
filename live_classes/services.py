@@ -9,14 +9,20 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
-from .models import LiveClass, LiveClassBundle, LiveClassPayment, LiveClassRegistration
+from .models import (
+    LIVE_CLASS_EDUCATOR_SHARE,
+    LiveClass,
+    LiveClassBundle,
+    LiveClassPayment,
+    LiveClassRegistration,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def credit_educator_live_class_revenue(payment):
     """Credit one educator wallet exactly once for a verified live-class payment."""
-    from courses.models import EDUCATOR_SHARE, EducatorTransaction, EducatorWallet
+    from courses.models import EducatorTransaction, EducatorWallet
 
     payment = LiveClassPayment.objects.select_for_update().get(pk=payment.pk)
     if payment.educator_credited_at:
@@ -26,7 +32,7 @@ def credit_educator_live_class_revenue(payment):
         logger.error('Verified live-class payment %s has no registration', payment.pk)
         return
     educator = registration.live_class.educator
-    share = (payment.amount * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
+    share = (payment.amount * LIVE_CLASS_EDUCATOR_SHARE).quantize(Decimal('0.01'))
     wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=educator)
     wallet.balance = Decimal(str(wallet.balance)) + share
     wallet.total_earned = Decimal(str(wallet.total_earned)) + share

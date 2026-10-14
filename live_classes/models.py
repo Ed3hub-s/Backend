@@ -11,6 +11,9 @@ from django.utils.text import slugify
 
 from courses.models import Course
 
+LIVE_CLASS_EDUCATOR_SHARE = Decimal('0.80')
+LIVE_CLASS_PLATFORM_SHARE = Decimal('0.20')
+
 
 class LiveClassBundle(models.Model):
     educator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='live_class_bundles')

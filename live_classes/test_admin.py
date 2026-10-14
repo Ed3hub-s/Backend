@@ -26,7 +26,7 @@ class LiveClassAdminTests(TestCase):
         )
         self.payment = LiveClassPayment.objects.create(
             user=self.learner, amount=Decimal('2500.00'), currency='NGN',
-            transaction_reference='LC-admin', status='successful', educator_share=Decimal('1500.00'),
+            transaction_reference='LC-admin', status='successful', educator_share=Decimal('2000.00'),
         )
         LiveClassRegistration.objects.create(
             live_class=self.live_class, learner=self.learner, payment=self.payment,
@@ -45,4 +45,4 @@ class LiveClassAdminTests(TestCase):
 
         response = self.client.get(reverse('admin:live_classes_liveclasspayment_changelist'))
         self.assertContains(response, 'Admin workshop')
-        self.assertContains(response, '1500.00')
+        self.assertContains(response, '2000.00')
