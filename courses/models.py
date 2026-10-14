@@ -206,6 +206,9 @@ class CoursePayment(models.Model):
     paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return f'{self.reference} ({self.status})'
+
 
 class Enrollment(models.Model):
     payment = models.OneToOneField(CoursePayment, on_delete=models.PROTECT, null=True, blank=True, related_name='enrollment')
@@ -435,3 +438,29 @@ class WithdrawalRequest(models.Model):
 
     def __str__(self):
         return f'{self.wallet.educator.username} — ₦{self.amount} ({self.status})'
+
+
+class PlatformSettings(models.Model):
+    """Admin-managed operational settings with a single database row."""
+
+    withdrawal_notification_email = models.EmailField(
+        blank=True,
+        help_text='Receives an email whenever an educator submits a withdrawal request.',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Platform setting'
+        verbose_name_plural = 'Platform settings'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls):
+        settings_object, _ = cls.objects.get_or_create(pk=1)
+        return settings_object
+
+    def __str__(self):
+        return 'Platform settings'

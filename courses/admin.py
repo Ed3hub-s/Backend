@@ -1,12 +1,14 @@
 from django.contrib import admin
 from django.utils.html import format_html
+from django.db.models import Count, Q
 from .models import CoursePayment
 from unfold.admin import ModelAdmin, TabularInline, StackedInline
 from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
     Assessment, CourseResource, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Certificate,
-    Session, SessionRegistration, EducatorWallet, EducatorTransaction, WithdrawalRequest
+    Session, SessionRegistration, EducatorWallet, EducatorTransaction, WithdrawalRequest,
+    PlatformSettings,
 )
 
 
@@ -87,13 +89,55 @@ class ChoiceAdmin(ModelAdmin):
     search_fields = ('text', 'question__text')
 
 
+class PaidEnrollmentInline(TabularInline):
+    model = Enrollment
+    extra = 0
+    verbose_name = 'Paid learner'
+    verbose_name_plural = 'Paid learners'
+    fields = ('learner', 'learner_email', 'payment', 'amount_paid', 'enrolled_at')
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(payment__status='successful').select_related('learner', 'payment')
+
+    @admin.display(description='Email')
+    def learner_email(self, obj):
+        return obj.learner.email
+
+    @admin.display(description='Amount paid')
+    def amount_paid(self, obj):
+        return f'{obj.payment.currency} {obj.payment.amount}' if obj.payment else '-'
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Course)
 class CourseAdmin(ModelAdmin):
-    list_display = ('title', 'instructor', 'skill_level', 'is_published', 'price', 'created_at')
+    list_display = ('title', 'instructor', 'paid_learners', 'buyer_names', 'skill_level', 'is_published', 'price', 'created_at')
     list_filter = ('skill_level', 'is_published', 'category')
     search_fields = ('title', 'instructor__username')
     prepopulated_fields = {'slug': ('title',)}
-    inlines = [ModuleInline]
+    inlines = [ModuleInline, PaidEnrollmentInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            paid_learner_count=Count('payments__learner', filter=Q(payments__status='successful'), distinct=True),
+        )
+
+    @admin.display(description='Paid learners', ordering='paid_learner_count')
+    def paid_learners(self, obj):
+        return obj.paid_learner_count
+
+    @admin.display(description='Buyer names')
+    def buyer_names(self, obj):
+        names = []
+        for payment in obj.payments.filter(status='successful').select_related('learner')[:5]:
+            names.append(payment.learner.get_full_name().strip() or payment.learner.username)
+        return ', '.join(names) if names else '-'
 
 
 @admin.register(Module)
@@ -254,6 +298,20 @@ class EducatorWalletAdmin(ModelAdmin):
     inlines = [EducatorTransactionInline]
 
 
+@admin.register(EducatorTransaction)
+class EducatorTransactionAdmin(ModelAdmin):
+    list_display = ('wallet', 'transaction_type', 'amount', 'course', 'description', 'created_at')
+    list_filter = ('transaction_type', 'created_at')
+    search_fields = ('wallet__educator__username', 'wallet__educator__email', 'course__title', 'description')
+    readonly_fields = ('wallet', 'amount', 'transaction_type', 'description', 'course', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(WithdrawalRequest)
 class WithdrawalRequestAdmin(ModelAdmin):
     list_display = ('get_educator', 'amount', 'bank_name', 'account_number', 'account_name', 'status', 'created_at')
@@ -265,3 +323,15 @@ class WithdrawalRequestAdmin(ModelAdmin):
     def get_educator(self, obj):
         return obj.wallet.educator.username
     get_educator.short_description = 'Educator'
+
+
+@admin.register(PlatformSettings)
+class PlatformSettingsAdmin(ModelAdmin):
+    fields = ('withdrawal_notification_email', 'updated_at')
+    readonly_fields = ('updated_at',)
+
+    def has_add_permission(self, request):
+        return not PlatformSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False

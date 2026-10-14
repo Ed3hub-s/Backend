@@ -268,6 +268,16 @@ UNFOLD = {
                 ],
             },
             {
+                'title': 'Educator Finance',
+                'separator': True,
+                'items': [
+                    {'title': 'Educator Wallets', 'icon': 'account_balance_wallet', 'link': '/admin/courses/educatorwallet/'},
+                    {'title': 'Transactions', 'icon': 'receipt_long', 'link': '/admin/courses/educatortransaction/'},
+                    {'title': 'Withdrawals', 'icon': 'payments', 'link': '/admin/courses/withdrawalrequest/'},
+                    {'title': 'Notification Settings', 'icon': 'settings', 'link': '/admin/courses/platformsettings/1/change/'},
+                ],
+            },
+            {
                 'title': 'Chat',
                 'separator': True,
                 'items': [

@@ -14,6 +14,65 @@ from .models import LiveClass, LiveClassBundle, LiveClassPayment, LiveClassRegis
 logger = logging.getLogger(__name__)
 
 
+def credit_educator_live_class_revenue(payment):
+    """Credit one educator wallet exactly once for a verified live-class payment."""
+    from courses.models import EDUCATOR_SHARE, EducatorTransaction, EducatorWallet
+
+    payment = LiveClassPayment.objects.select_for_update().get(pk=payment.pk)
+    if payment.educator_credited_at:
+        return
+    registration = payment.registrations.select_related('live_class__educator', 'live_class__course').first()
+    if not registration:
+        logger.error('Verified live-class payment %s has no registration', payment.pk)
+        return
+    educator = registration.live_class.educator
+    share = (payment.amount * Decimal(str(EDUCATOR_SHARE))).quantize(Decimal('0.01'))
+    wallet, _ = EducatorWallet.objects.select_for_update().get_or_create(educator=educator)
+    wallet.balance = Decimal(str(wallet.balance)) + share
+    wallet.total_earned = Decimal(str(wallet.total_earned)) + share
+    wallet.save(update_fields=('balance', 'total_earned', 'updated_at'))
+    label = registration.live_class.bundle.title if registration.live_class.bundle_id else registration.live_class.title
+    EducatorTransaction.objects.create(
+        wallet=wallet,
+        amount=share,
+        transaction_type='credit',
+        course=registration.live_class.course,
+        description=f'Verified live class payment: {label}',
+    )
+    payment.educator_share = share
+    payment.educator_credited_at = timezone.now()
+    payment.save(update_fields=('educator_share', 'educator_credited_at', 'updated_at'))
+
+
+@transaction.atomic
+def refund_live_class_payment(payment):
+    """Reverse access and previously credited educator revenue exactly once."""
+    from courses.models import EducatorTransaction, EducatorWallet
+
+    payment = LiveClassPayment.objects.select_for_update().get(pk=payment.pk)
+    if payment.status == 'refunded':
+        return payment
+    registration = payment.registrations.select_related('live_class__educator', 'live_class__course').first()
+    if payment.educator_credited_at and registration:
+        wallet = EducatorWallet.objects.select_for_update().get(educator=registration.live_class.educator)
+        share = Decimal(str(payment.educator_share))
+        wallet.balance = Decimal(str(wallet.balance)) - share
+        wallet.total_earned = Decimal(str(wallet.total_earned)) - share
+        wallet.save(update_fields=('balance', 'total_earned', 'updated_at'))
+        label = registration.live_class.bundle.title if registration.live_class.bundle_id else registration.live_class.title
+        EducatorTransaction.objects.create(
+            wallet=wallet,
+            amount=share,
+            transaction_type='debit',
+            course=registration.live_class.course,
+            description=f'Refunded live class payment: {label}',
+        )
+    payment.status = 'refunded'
+    payment.save(update_fields=('status', 'updated_at'))
+    payment.registrations.update(access_status='refunded')
+    return payment
+
+
 class ProviderConfigurationError(APIException):
     status_code = 503
     default_detail = 'The live classroom provider is not configured.'
@@ -328,6 +387,7 @@ def verify_live_class_payment(registration, reference):
         item.access_granted_at = payment.paid_at
         item.amount_paid = Decimal(share + (index < remainder)) / 100
         item.save(update_fields=('registration_status', 'access_status', 'access_granted_at', 'amount_paid'))
+    credit_educator_live_class_revenue(payment)
     registration.refresh_from_db()
     return registration
 

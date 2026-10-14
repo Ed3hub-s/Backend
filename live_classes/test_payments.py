@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 from datetime import timedelta
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 from django.contrib.auth.models import User
@@ -9,6 +10,8 @@ from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
+from authentication.models import UserProfile
+from courses.models import EducatorTransaction, EducatorWallet
 from .models import LiveClass, LiveClassPayment, LiveClassRecording, LiveClassRegistration
 
 
@@ -70,6 +73,32 @@ class PaidClassTests(APITestCase):
         self.assertEqual(str(self.registration.amount_paid), '2500.00')
         self.assertEqual(self.registration.access_status, 'active')
         get.assert_called_once()
+        wallet = EducatorWallet.objects.get(educator=self.teacher)
+        self.assertEqual(wallet.balance, Decimal('1500.00'))
+        self.assertEqual(wallet.total_earned, Decimal('1500.00'))
+        self.assertEqual(EducatorTransaction.objects.filter(wallet=wallet, transaction_type='credit').count(), 1)
+        UserProfile.objects.update_or_create(user=self.teacher, defaults={'role': 'educator'})
+        self.client.force_authenticate(self.teacher)
+        earnings = self.client.get('/api/courses/educator/wallet/')
+        self.assertEqual(earnings.status_code, 200)
+        self.assertEqual(earnings.data['total_earned'], '1500.00')
+        self.assertIn('Paid workshop', earnings.data['transactions'][0]['description'])
+
+    @patch('live_classes.services.requests.get')
+    def test_full_refund_reverses_live_class_revenue_once(self, get):
+        get.return_value = self.verification()
+        self.client.post(self.base + '/verify-payment/', {}, format='json')
+        for _ in range(2):
+            response = self.webhook('refund.processed', {
+                'transaction_reference': 'LC-test', 'amount': 250000, 'currency': 'NGN',
+            })
+            self.assertEqual(response.status_code, 200)
+
+        wallet = EducatorWallet.objects.get(educator=self.teacher)
+        self.assertEqual(wallet.balance, Decimal('0.00'))
+        self.assertEqual(wallet.total_earned, Decimal('0.00'))
+        self.assertEqual(EducatorTransaction.objects.filter(wallet=wallet, transaction_type='credit').count(), 1)
+        self.assertEqual(EducatorTransaction.objects.filter(wallet=wallet, transaction_type='debit').count(), 1)
 
     @patch('live_classes.services.requests.post')
     def test_resume_checkout_reuses_saved_link_without_reinitializing(self, post):

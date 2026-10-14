@@ -29,6 +29,7 @@ from .services import (
     CloudflareRealtimeKitV1,
     authorize_classroom,
     register_for_live_class,
+    refund_live_class_payment,
     verify_live_class_payment,
 )
 from notifications.utils import NotificationService
@@ -221,13 +222,9 @@ class PaystackLiveClassWebhookView(APIView):
             if registration:
                 verify_live_class_payment(registration, reference)
         elif event_name == 'refund.processed':
-            with transaction.atomic():
-                payment = LiveClassPayment.objects.select_for_update().get(pk=payment.pk)
-                if not self.is_full_refund(event_data, payment):
-                    return Response({'status': 'ignored'})
-                payment.status = 'refunded'
-                payment.save(update_fields=('status', 'updated_at'))
-                payment.registrations.update(access_status='refunded')
+            if not self.is_full_refund(event_data, payment):
+                return Response({'status': 'ignored'})
+            refund_live_class_payment(payment)
         return Response({'status': 'ok'})
 
     @staticmethod

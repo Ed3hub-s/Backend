@@ -2,7 +2,7 @@ from django.contrib.auth.models import Permission, User
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import Course, CoursePayment, Lesson, Module
+from .models import Course, CoursePayment, Enrollment, Lesson, Module
 
 
 @override_settings(
@@ -44,6 +44,22 @@ class AdminVideoReviewTests(TestCase):
         )
         response = self.client.get(reverse('admin:courses_coursepayment_change', args=[payment.pk]))
         self.assertContains(response, 'ADMIN-test')
+
+    def test_course_admin_shows_paid_learner_count_and_name(self):
+        buyer = User.objects.create_user('course-buyer', 'buyer@example.com', first_name='Course', last_name='Buyer')
+        payment = CoursePayment.objects.create(
+            course=self.course, learner=buyer, amount=100, reference='ADMIN-paid',
+            customer_email=buyer.email, status='successful',
+        )
+        Enrollment.objects.create(course=self.course, learner=buyer, payment=payment)
+
+        response = self.client.get(reverse('admin:courses_course_changelist'))
+        self.assertContains(response, 'Course Buyer')
+        self.assertContains(response, 'Paid learners')
+
+        response = self.client.get(reverse('admin:courses_course_change', args=[self.course.pk]))
+        self.assertContains(response, 'buyer@example.com')
+        self.assertContains(response, 'ADMIN-paid')
 
     def test_missing_video_has_clear_empty_state(self):
         self.lesson.video_file = ''

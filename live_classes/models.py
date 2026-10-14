@@ -142,6 +142,8 @@ class LiveClassPayment(models.Model):
     status = models.CharField(max_length=12, choices=STATUSES, default='pending')
     paid_at = models.DateTimeField(null=True, blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    educator_share = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    educator_credited_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

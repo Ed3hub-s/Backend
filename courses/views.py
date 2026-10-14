@@ -5,9 +5,12 @@ from rest_framework import status, generics, filters, parsers
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+import logging
 import json
 import re
 
+from django.conf import settings
+from django.core.mail import send_mail
 from authentication.utils import credit_first_purchase_commission
 from .payments import purchase_course, require_course_access
 from analytics.models import AnalyticsEvent
@@ -16,8 +19,36 @@ from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
     Certificate, Quiz, Question, Choice, Session, SessionRegistration,
-    EducatorWallet, EducatorTransaction, WithdrawalRequest, EDUCATOR_SHARE,
+    EducatorWallet, EducatorTransaction, WithdrawalRequest, PlatformSettings, EDUCATOR_SHARE,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def send_withdrawal_notification(withdrawal_id, recipient):
+    try:
+        withdrawal = WithdrawalRequest.objects.select_related('wallet__educator').get(pk=withdrawal_id)
+        educator = withdrawal.wallet.educator
+        educator_name = educator.get_full_name().strip() or educator.username
+        send_mail(
+            subject=f'New educator withdrawal request #{withdrawal.pk}',
+            message=(
+                f'Educator: {educator_name}\n'
+                f'Email: {educator.email}\n'
+                f'Amount: NGN {withdrawal.amount}\n'
+                f'Bank: {withdrawal.bank_name}\n'
+                f'Account name: {withdrawal.account_name}\n'
+                f'Account number: {withdrawal.account_number}\n'
+                f'Status: {withdrawal.get_status_display()}\n'
+                f'Submitted: {withdrawal.created_at.isoformat()}\n\n'
+                'Review this request in the Ed3Hub administration panel.'
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[recipient],
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception('Could not send withdrawal request %s notification email', withdrawal_id)
 from .serializers import (
     CategorySerializer, CourseListSerializer, CourseDetailSerializer, CourseWriteSerializer,
     LessonSerializer, ModuleSerializer, EnrollmentSerializer, LessonProgressSerializer,
@@ -1458,8 +1489,6 @@ class WithdrawalRequestView(APIView):
         if not hasattr(request.user, 'profile') or request.user.profile.role != 'educator':
             return Response({'detail': 'Only educators can withdraw.'}, status=status.HTTP_403_FORBIDDEN)
 
-        wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
-
         try:
             amount = Decimal(str(request.data.get('amount', '0'))).quantize(Decimal('0.01'))
         except InvalidOperation:
@@ -1475,28 +1504,37 @@ class WithdrawalRequestView(APIView):
         if amount <= 0:
             return Response({'detail': 'Amount must be greater than zero.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if amount > wallet.balance:
-            return Response({'detail': f'Insufficient balance. Available: ₦{wallet.balance}'}, status=status.HTTP_400_BAD_REQUEST)
+        with db_transaction.atomic():
+            wallet, _ = EducatorWallet.objects.get_or_create(educator=request.user)
+            wallet = EducatorWallet.objects.select_for_update().get(pk=wallet.pk)
+            if amount > wallet.balance:
+                return Response({'detail': f'Insufficient balance. Available: ₦{wallet.balance}'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Deduct from wallet immediately and create withdrawal request
-        wallet.balance = Decimal(str(wallet.balance)) - amount
-        wallet.total_withdrawn = Decimal(str(wallet.total_withdrawn)) + amount
-        wallet.save()
+            # Reserve funds immediately so concurrent requests cannot overspend.
+            wallet.balance = Decimal(str(wallet.balance)) - amount
+            wallet.total_withdrawn = Decimal(str(wallet.total_withdrawn)) + amount
+            wallet.save(update_fields=('balance', 'total_withdrawn', 'updated_at'))
 
-        EducatorTransaction.objects.create(
-            wallet=wallet,
-            amount=amount,
-            transaction_type='debit',
-            description=f'Withdrawal request to {bank_name} — {account_number}',
-        )
+            EducatorTransaction.objects.create(
+                wallet=wallet,
+                amount=amount,
+                transaction_type='debit',
+                description=f'Withdrawal request to {bank_name} — {account_number}',
+            )
 
-        withdrawal = WithdrawalRequest.objects.create(
-            wallet=wallet,
-            amount=amount,
-            bank_name=bank_name,
-            account_number=account_number,
-            account_name=account_name,
-        )
+            withdrawal = WithdrawalRequest.objects.create(
+                wallet=wallet,
+                amount=amount,
+                bank_name=bank_name,
+                account_number=account_number,
+                account_name=account_name,
+            )
+            notification_email = PlatformSettings.load().withdrawal_notification_email.strip()
+            if notification_email:
+                db_transaction.on_commit(
+                    lambda withdrawal_id=withdrawal.pk, recipient=notification_email:
+                    send_withdrawal_notification(withdrawal_id, recipient)
+                )
 
         return Response({
             'id': withdrawal.id,
