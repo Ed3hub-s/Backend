@@ -3,7 +3,7 @@ from rest_framework import serializers
 from .payments import has_course_access
 from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
-    Assessment, CourseResource, Enrollment, LessonProgress,
+    Assessment, AssessmentSubmission, QuizAttempt, CourseResource, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Certificate,
     Session, SessionRegistration,
 )
@@ -18,11 +18,25 @@ class CategorySerializer(serializers.ModelSerializer):
 class ChoiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Choice
+        fields = ('id', 'text')
+
+
+class EducatorChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choice
         fields = ('id', 'text', 'is_correct')
 
 
 class QuestionSerializer(serializers.ModelSerializer):
     choices = ChoiceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = ('id', 'text', 'order', 'choices')
+
+
+class EducatorQuestionSerializer(serializers.ModelSerializer):
+    choices = EducatorChoiceSerializer(many=True, read_only=True)
 
     class Meta:
         model = Question
@@ -35,6 +49,28 @@ class QuizSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = ('id', 'title', 'pass_score', 'reward_tokens', 'questions')
+
+
+class EducatorQuizSerializer(serializers.ModelSerializer):
+    questions = EducatorQuestionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = ('id', 'title', 'pass_score', 'reward_tokens', 'questions')
+
+
+class QuizAttemptSerializer(serializers.ModelSerializer):
+    quiz_title = serializers.CharField(source='quiz.title', read_only=True)
+    learner_name = serializers.SerializerMethodField()
+    learner_email = serializers.EmailField(source='learner.email', read_only=True)
+
+    class Meta:
+        model = QuizAttempt
+        fields = ('id', 'quiz', 'quiz_title', 'learner_name', 'learner_email', 'attempt_number', 'score', 'passed', 'reward_granted', 'submitted_at')
+        read_only_fields = fields
+
+    def get_learner_name(self, obj):
+        return obj.learner.get_full_name().strip() or obj.learner.username
 
 
 class LessonSerializer(serializers.ModelSerializer):
@@ -65,10 +101,40 @@ class LessonSerializer(serializers.ModelSerializer):
         return data
 
 
+class AssessmentSubmissionSerializer(serializers.ModelSerializer):
+    learner_name = serializers.SerializerMethodField()
+    learner_email = serializers.EmailField(source='learner.email', read_only=True)
+    assessment_title = serializers.CharField(source='assessment.title', read_only=True)
+
+    class Meta:
+        model = AssessmentSubmission
+        fields = (
+            'id', 'assessment', 'assessment_title', 'learner_name', 'learner_email',
+            'response_text', 'attachment', 'status', 'score', 'feedback',
+            'reward_granted', 'submitted_at', 'updated_at', 'graded_at',
+        )
+        read_only_fields = (
+            'id', 'assessment', 'assessment_title', 'learner_name', 'learner_email',
+            'status', 'score', 'feedback', 'reward_granted', 'submitted_at', 'updated_at', 'graded_at',
+        )
+
+    def get_learner_name(self, obj):
+        return obj.learner.get_full_name().strip() or obj.learner.username
+
+
 class AssessmentSerializer(serializers.ModelSerializer):
+    my_submission = serializers.SerializerMethodField()
+
     class Meta:
         model = Assessment
-        fields = ('id', 'title', 'description', 'assessment_type', 'duration_minutes', 'due_date', 'reward_tokens')
+        fields = ('id', 'title', 'description', 'assessment_type', 'duration_minutes', 'pass_score', 'due_date', 'reward_tokens', 'my_submission')
+
+    def get_my_submission(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        submission = obj.submissions.filter(learner=request.user).first()
+        return AssessmentSubmissionSerializer(submission, context=self.context).data if submission else None
 
 
 class ModuleSerializer(serializers.ModelSerializer):
@@ -79,6 +145,15 @@ class ModuleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Module
         fields = ('id', 'title', 'order', 'reward_tokens', 'lessons', 'assessments', 'quiz')
+
+
+class EducatorLessonSerializer(LessonSerializer):
+    quiz = EducatorQuizSerializer(read_only=True)
+
+
+class EducatorModuleSerializer(ModuleSerializer):
+    lessons = EducatorLessonSerializer(many=True, read_only=True)
+    quiz = EducatorQuizSerializer(read_only=True)
 
 
 class CourseResourceSerializer(serializers.ModelSerializer):

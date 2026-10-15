@@ -10,8 +10,9 @@ from .views import (
     IssueCertificateView, MyCertificatesView, CertificateDetailView, RegenerateCertificateView,
     ModuleCreateView, ModuleUpdateView,
     LessonCreateView, LessonUpdateView,
-    QuizCreateView, QuizUpdateView,
-    AssessmentCreateView, AssessmentUpdateView,
+    QuizCreateView, QuizUpdateView, QuizAttemptView, EducatorQuizAttemptsView,
+    AssessmentCreateView, AssessmentUpdateView, AssessmentSubmissionView,
+    EducatorAssessmentSubmissionsView, GradeAssessmentSubmissionView,
     CourseContentView,
     SessionListCreateView, SessionDetailView, PublicSessionListView,
     SessionRegisterView, SessionUnregisterView,
@@ -42,10 +43,15 @@ urlpatterns = [
     # Quizzes
     path('modules/<int:module_id>/quiz/create/', QuizCreateView.as_view(), name='quiz-create'),
     path('quizzes/<int:quiz_id>/', QuizUpdateView.as_view(), name='quiz-update'),
+    path('quizzes/<int:quiz_id>/attempt/', QuizAttemptView.as_view(), name='quiz-attempt'),
+    path('quizzes/<int:quiz_id>/results/', EducatorQuizAttemptsView.as_view(), name='quiz-results'),
 
     # Assessments
     path('<int:course_id>/assessments/create/', AssessmentCreateView.as_view(), name='assessment-create'),
     path('assessments/<int:assessment_id>/', AssessmentUpdateView.as_view(), name='assessment-update'),
+    path('assessments/<int:assessment_id>/submit/', AssessmentSubmissionView.as_view(), name='assessment-submit'),
+    path('assessments/<int:assessment_id>/submissions/', EducatorAssessmentSubmissionsView.as_view(), name='assessment-submissions'),
+    path('assessment-submissions/<int:submission_id>/grade/', GradeAssessmentSubmissionView.as_view(), name='assessment-grade'),
 
     # Enrollment
     path('my/enrollments/', MyEnrollmentsView.as_view(), name='my-enrollments'),

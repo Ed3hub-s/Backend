@@ -8,9 +8,12 @@ from rest_framework.views import APIView
 import logging
 import json
 import re
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.core.mail import send_mail
+from django.shortcuts import get_object_or_404
+from rest_framework.exceptions import PermissionDenied
 from authentication.utils import credit_first_purchase_commission
 from .payments import purchase_course, require_course_access
 from analytics.models import AnalyticsEvent
@@ -18,7 +21,8 @@ from analytics.services import track_event
 from .models import (
     Category, Course, Module, Lesson, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Assessment,
-    Certificate, Quiz, Question, Choice, Session, SessionRegistration,
+    Certificate, Quiz, Question, Choice, QuizAttempt, QuizAnswer,
+    AssessmentSubmission, Session, SessionRegistration,
     EducatorWallet, EducatorTransaction, WithdrawalRequest, PlatformSettings, EDUCATOR_SHARE,
 )
 
@@ -53,8 +57,9 @@ from .serializers import (
     CategorySerializer, CourseListSerializer, CourseDetailSerializer, CourseWriteSerializer,
     LessonSerializer, ModuleSerializer, EnrollmentSerializer, LessonProgressSerializer,
     ModuleProgressSerializer, ReviewSerializer, TokenWalletSerializer,
-    TokenTransactionSerializer, CertificateSerializer, QuizSerializer, AssessmentSerializer,
-    SessionSerializer, SessionRegistrationSerializer,
+    TokenTransactionSerializer, CertificateSerializer, QuizSerializer, EducatorQuizSerializer,
+    QuizAttemptSerializer, AssessmentSerializer, AssessmentSubmissionSerializer,
+    EducatorModuleSerializer, SessionSerializer, SessionRegistrationSerializer,
 )
 
 
@@ -1067,6 +1072,22 @@ class LessonUpdateView(APIView):
         return Response(status=204)
 
 
+def validate_quiz_questions(questions_data):
+    if not isinstance(questions_data, list) or not questions_data:
+        return 'Add at least one question.'
+    for index, question in enumerate(questions_data, start=1):
+        if not isinstance(question, dict) or not str(question.get('text', '')).strip():
+            return f'Question {index} needs question text.'
+        choices = question.get('choices')
+        if not isinstance(choices, list) or len(choices) < 2:
+            return f'Question {index} needs at least two choices.'
+        if any(not str(choice.get('text', '')).strip() for choice in choices if isinstance(choice, dict)) or any(not isinstance(choice, dict) for choice in choices):
+            return f'Every choice in question {index} needs text.'
+        if sum(bool(choice.get('is_correct')) for choice in choices) != 1:
+            return f'Question {index} must have exactly one correct choice.'
+    return None
+
+
 class QuizCreateView(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -1077,17 +1098,24 @@ class QuizCreateView(APIView):
             return Response({'detail': 'Not found.'}, status=404)
         if hasattr(module, 'quiz'):
             return Response({'detail': 'Quiz already exists for this module.'}, status=400)
+        questions_data = request.data.get('questions', [])
+        question_error = validate_quiz_questions(questions_data)
+        if question_error:
+            return Response({'detail': question_error}, status=400)
+        pass_score = int(request.data.get('pass_score', 70))
+        if pass_score < 0 or pass_score > 100:
+            return Response({'detail': 'Pass score must be between 0 and 100.'}, status=400)
         quiz = Quiz.objects.create(
             module=module,
             title=request.data.get('title', f'{module.title} Quiz'),
-            pass_score=int(request.data.get('pass_score', 70)),
+            pass_score=pass_score,
+            reward_tokens=int(request.data.get('reward_tokens', 5)),
         )
-        questions_data = request.data.get('questions', [])
         for q_data in questions_data:
             question = Question.objects.create(quiz=quiz, text=q_data.get('text', ''), order=q_data.get('order', 0))
             for c_data in q_data.get('choices', []):
                 Choice.objects.create(question=question, text=c_data.get('text', ''), is_correct=c_data.get('is_correct', False))
-        return Response(QuizSerializer(quiz).data, status=201)
+        return Response(EducatorQuizSerializer(quiz).data, status=201)
 
 
 class QuizUpdateView(APIView):
@@ -1103,14 +1131,22 @@ class QuizUpdateView(APIView):
             return Response({'detail': 'Not found.'}, status=404)
         
         # Update quiz fields
+        questions_data = request.data.get('questions')
+        if questions_data is not None:
+            if quiz.attempts.exists():
+                return Response({'detail': 'Questions cannot be changed after learners have attempted this quiz.'}, status=400)
+            question_error = validate_quiz_questions(questions_data)
+            if question_error:
+                return Response({'detail': question_error}, status=400)
         quiz.title = request.data.get('title', quiz.title)
         quiz.pass_score = int(request.data.get('pass_score', quiz.pass_score))
+        if quiz.pass_score < 0 or quiz.pass_score > 100:
+            return Response({'detail': 'Pass score must be between 0 and 100.'}, status=400)
         quiz.reward_tokens = int(request.data.get('reward_tokens', quiz.reward_tokens))
         quiz.save()
         
         # Update questions if provided
-        questions_data = request.data.get('questions', [])
-        if questions_data:
+        if questions_data is not None:
             logger.info(f"Updating {len(questions_data)} questions for quiz {quiz_id}")
             
             # Delete existing questions (cascade will delete choices)
@@ -1134,15 +1170,127 @@ class QuizUpdateView(APIView):
                     )
                     logger.info(f"Created choice: {choice.id} - correct={choice.is_correct}")
         
-        return Response(QuizSerializer(quiz).data)
+        return Response(EducatorQuizSerializer(quiz).data)
 
     def delete(self, request, quiz_id):
         try:
             quiz = Quiz.objects.get(id=quiz_id, module__course__instructor=request.user)
         except Quiz.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
+        if quiz.attempts.exists():
+            return Response({'detail': 'A quiz with learner attempts cannot be deleted.'}, status=400)
         quiz.delete()
         return Response(status=204)
+
+
+def quiz_course(quiz):
+    if quiz.module_id:
+        return quiz.module.course
+    if quiz.lesson_id:
+        return quiz.lesson.module.course
+    return None
+
+
+class QuizAttemptView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, quiz_id):
+        quiz = get_object_or_404(
+            Quiz.objects.select_related('module__course', 'lesson__module__course'),
+            pk=quiz_id,
+        )
+        course = quiz_course(quiz)
+        if not course:
+            return Response({'detail': 'Quiz is not attached to a course.'}, status=400)
+        require_course_access(course, request.user)
+        attempts = quiz.attempts.filter(learner=request.user)
+        return Response({
+            'quiz': QuizSerializer(quiz).data,
+            'attempts': QuizAttemptSerializer(attempts, many=True).data,
+        })
+
+    def post(self, request, quiz_id):
+        with db_transaction.atomic():
+            quiz = get_object_or_404(
+                Quiz.objects.select_for_update().select_related('module__course', 'lesson__module__course'),
+                pk=quiz_id,
+            )
+            course = quiz_course(quiz)
+            if not course:
+                return Response({'detail': 'Quiz is not attached to a course.'}, status=400)
+            require_course_access(course, request.user)
+            questions = list(quiz.questions.prefetch_related('choices').order_by('order', 'pk'))
+            if not questions:
+                return Response({'detail': 'This quiz has no questions yet.'}, status=400)
+            submitted = request.data.get('answers')
+            if not isinstance(submitted, list):
+                return Response({'detail': 'Answers must be provided as a list.'}, status=400)
+            answer_map = {}
+            for item in submitted:
+                if not isinstance(item, dict):
+                    return Response({'detail': 'Each answer must include a question and selected choice.'}, status=400)
+                try:
+                    question_id = int(item.get('question_id'))
+                    choice_id = int(item.get('choice_id'))
+                except (TypeError, ValueError):
+                    return Response({'detail': 'Each answer must include a valid question and selected choice.'}, status=400)
+                if question_id in answer_map:
+                    return Response({'detail': 'Each question can only be answered once.'}, status=400)
+                answer_map[question_id] = choice_id
+            if set(answer_map) != {question.pk for question in questions}:
+                return Response({'detail': 'Every quiz question must be answered.'}, status=400)
+
+            correct = 0
+            resolved_answers = []
+            for question in questions:
+                choice = next((item for item in question.choices.all() if item.pk == answer_map[question.pk]), None)
+                if not choice:
+                    return Response({'detail': 'A selected choice does not belong to its question.'}, status=400)
+                correct += int(choice.is_correct)
+                resolved_answers.append((question, choice))
+            score = (Decimal(correct) * Decimal('100') / Decimal(len(questions))).quantize(Decimal('0.01'))
+            passed = score >= Decimal(quiz.pass_score)
+            attempt_number = quiz.attempts.filter(learner=request.user).count() + 1
+            reward_granted = passed and not quiz.attempts.filter(
+                learner=request.user, reward_granted=True,
+            ).exists()
+            attempt = QuizAttempt.objects.create(
+                quiz=quiz,
+                learner=request.user,
+                attempt_number=attempt_number,
+                score=score,
+                passed=passed,
+                reward_granted=reward_granted,
+            )
+            QuizAnswer.objects.bulk_create([
+                QuizAnswer(
+                    attempt=attempt,
+                    question=question,
+                    selected_choice=choice,
+                    is_correct=choice.is_correct,
+                )
+                for question, choice in resolved_answers
+            ])
+            if reward_granted and quiz.reward_tokens:
+                award_tokens(
+                    request.user,
+                    quiz.reward_tokens,
+                    'quiz_pass',
+                    f'Passed quiz: {quiz.title}',
+                )
+        return Response(QuizAttemptSerializer(attempt).data, status=201)
+
+
+class EducatorQuizAttemptsView(generics.ListAPIView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class = QuizAttemptSerializer
+
+    def get_queryset(self):
+        quiz = get_object_or_404(Quiz, pk=self.kwargs['quiz_id'])
+        course = quiz_course(quiz)
+        if not course or course.instructor_id != self.request.user.pk:
+            raise PermissionDenied('Only the course educator can view these results.')
+        return quiz.attempts.select_related('learner', 'quiz')
 
 
 class AssessmentCreateView(APIView):
@@ -1153,15 +1301,27 @@ class AssessmentCreateView(APIView):
             course = Course.objects.get(id=course_id, instructor=request.user)
         except Course.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
+        module = None
+        module_id = request.data.get('module') or request.data.get('module_id')
+        if module_id:
+            module = Module.objects.filter(id=module_id, course=course).first()
+            if not module:
+                return Response({'detail': 'Module does not belong to this course.'}, status=400)
+        pass_score = int(request.data.get('pass_score', 70))
+        if pass_score < 0 or pass_score > 100:
+            return Response({'detail': 'Pass score must be between 0 and 100.'}, status=400)
         assessment = Assessment.objects.create(
             course=course,
+            module=module,
             title=request.data.get('title', ''),
             description=request.data.get('description', ''),
             assessment_type=request.data.get('assessment_type', 'graded'),
             duration_minutes=int(request.data.get('duration_minutes', 20)),
+            pass_score=pass_score,
+            reward_tokens=int(request.data.get('reward_tokens', 15)),
             due_date=request.data.get('due_date') or None,
         )
-        return Response(AssessmentSerializer(assessment).data, status=201)
+        return Response(AssessmentSerializer(assessment, context={'request': request}).data, status=201)
 
 
 class AssessmentUpdateView(APIView):
@@ -1172,19 +1332,121 @@ class AssessmentUpdateView(APIView):
             assessment = Assessment.objects.get(id=assessment_id, course__instructor=request.user)
         except Assessment.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
-        for field in ('title', 'description', 'assessment_type', 'duration_minutes', 'due_date'):
+        if 'pass_score' in request.data:
+            pass_score = int(request.data['pass_score'])
+            if pass_score < 0 or pass_score > 100:
+                return Response({'detail': 'Pass score must be between 0 and 100.'}, status=400)
+        for field in ('title', 'description', 'assessment_type', 'duration_minutes', 'pass_score', 'reward_tokens', 'due_date'):
             if field in request.data:
                 setattr(assessment, field, request.data[field] or None if field == 'due_date' else request.data[field])
         assessment.save()
-        return Response(AssessmentSerializer(assessment).data)
+        return Response(AssessmentSerializer(assessment, context={'request': request}).data)
 
     def delete(self, request, assessment_id):
         try:
             assessment = Assessment.objects.get(id=assessment_id, course__instructor=request.user)
         except Assessment.DoesNotExist:
             return Response({'detail': 'Not found.'}, status=404)
+        if assessment.submissions.exists():
+            return Response({'detail': 'An assessment with learner submissions cannot be deleted.'}, status=400)
         assessment.delete()
         return Response(status=204)
+
+
+class AssessmentSubmissionView(APIView):
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
+
+    def get_assessment(self, assessment_id):
+        return get_object_or_404(Assessment.objects.select_related('course'), pk=assessment_id)
+
+    def get(self, request, assessment_id):
+        assessment = self.get_assessment(assessment_id)
+        require_course_access(assessment.course, request.user)
+        submission = assessment.submissions.filter(learner=request.user).first()
+        if not submission:
+            return Response({'detail': 'No submission yet.'}, status=404)
+        return Response(AssessmentSubmissionSerializer(submission, context={'request': request}).data)
+
+    def post(self, request, assessment_id):
+        assessment = self.get_assessment(assessment_id)
+        require_course_access(assessment.course, request.user)
+        if assessment.due_date and assessment.due_date < timezone.localdate():
+            return Response({'detail': 'The submission deadline has passed.'}, status=400)
+        response_text = str(request.data.get('response_text', '')).strip()
+        attachment = request.FILES.get('attachment')
+        existing = assessment.submissions.filter(learner=request.user).first()
+        if existing and existing.status == 'graded':
+            return Response({'detail': 'A graded assessment cannot be resubmitted.'}, status=400)
+        if not response_text and not attachment and not (existing and existing.attachment):
+            return Response({'detail': 'Write a response or attach a file.'}, status=400)
+        if existing:
+            existing.response_text = response_text
+            if attachment:
+                if existing.attachment:
+                    existing.attachment.delete(save=False)
+                existing.attachment = attachment
+            existing.save()
+            submission = existing
+            response_status = 200
+        else:
+            submission = AssessmentSubmission.objects.create(
+                assessment=assessment,
+                learner=request.user,
+                response_text=response_text,
+                attachment=attachment,
+            )
+            response_status = 201
+        return Response(
+            AssessmentSubmissionSerializer(submission, context={'request': request}).data,
+            status=response_status,
+        )
+
+
+class EducatorAssessmentSubmissionsView(generics.ListAPIView):
+    permission_classes = (IsAuthenticated,)
+    serializer_class = AssessmentSubmissionSerializer
+
+    def get_queryset(self):
+        assessment = get_object_or_404(Assessment, pk=self.kwargs['assessment_id'])
+        if assessment.course.instructor_id != self.request.user.pk:
+            raise PermissionDenied('Only the course educator can view these submissions.')
+        return assessment.submissions.select_related('learner', 'assessment')
+
+
+class GradeAssessmentSubmissionView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, submission_id):
+        with db_transaction.atomic():
+            submission = get_object_or_404(
+                AssessmentSubmission.objects.select_for_update().select_related('assessment__course', 'learner'),
+                pk=submission_id,
+            )
+            if submission.assessment.course.instructor_id != request.user.pk:
+                raise PermissionDenied('Only the course educator can grade this submission.')
+            try:
+                score = Decimal(str(request.data.get('score'))).quantize(Decimal('0.01'))
+            except (InvalidOperation, TypeError):
+                return Response({'detail': 'A valid score is required.'}, status=400)
+            if score < 0 or score > 100:
+                return Response({'detail': 'Score must be between 0 and 100.'}, status=400)
+            submission.score = score
+            submission.feedback = str(request.data.get('feedback', '')).strip()
+            submission.status = 'graded'
+            submission.graded_at = timezone.now()
+            passed = score >= Decimal(submission.assessment.pass_score)
+            if passed and not submission.reward_granted:
+                submission.reward_granted = True
+                if submission.assessment.reward_tokens:
+                    award_tokens(
+                        submission.learner,
+                        submission.assessment.reward_tokens,
+                        'assessment_pass',
+                        f'Passed assessment: {submission.assessment.title}',
+                    )
+            submission.save(update_fields=('score', 'feedback', 'status', 'graded_at', 'reward_granted', 'updated_at'))
+        return Response(AssessmentSubmissionSerializer(submission, context={'request': request}).data)
 
 
 class CourseContentView(APIView):
@@ -1199,7 +1461,7 @@ class CourseContentView(APIView):
         modules = Module.objects.filter(course=course).prefetch_related('lessons__quiz__questions__choices')
         assessments = Assessment.objects.filter(course=course)
         return Response({
-            'modules': ModuleSerializer(modules, many=True, context={'request': request}).data,
+            'modules': EducatorModuleSerializer(modules, many=True, context={'request': request}).data,
             'assessments': AssessmentSerializer(assessments, many=True).data,
         })
 

@@ -5,7 +5,8 @@ from .models import CoursePayment
 from unfold.admin import ModelAdmin, TabularInline, StackedInline
 from .models import (
     Category, Course, Module, Lesson, Quiz, Question, Choice,
-    Assessment, CourseResource, Enrollment, LessonProgress,
+    Assessment, AssessmentSubmission, QuizAttempt, QuizAnswer,
+    CourseResource, Enrollment, LessonProgress,
     ModuleProgress, Review, TokenWallet, TokenTransaction, Certificate,
     Session, SessionRegistration, EducatorWallet, EducatorTransaction, WithdrawalRequest,
     PlatformSettings,
@@ -200,13 +201,42 @@ class CoursePaymentAdmin(ModelAdmin):
 
 @admin.register(Assessment)
 class AssessmentAdmin(ModelAdmin):
-    list_display = ('title', 'course', 'get_module', 'assessment_type', 'duration_minutes', 'reward_tokens')
+    list_display = ('title', 'course', 'get_module', 'assessment_type', 'duration_minutes', 'pass_score', 'reward_tokens')
     list_filter = ('assessment_type', 'course')
     search_fields = ('title', 'description', 'course__title')
     
     def get_module(self, obj):
         return obj.module.title if obj.module else '-'
     get_module.short_description = 'Module'
+
+
+@admin.register(QuizAttempt)
+class QuizAttemptAdmin(ModelAdmin):
+    list_display = ('quiz', 'learner', 'attempt_number', 'score', 'passed', 'reward_granted', 'submitted_at')
+    list_filter = ('passed', 'reward_granted', 'submitted_at')
+    search_fields = ('quiz__title', 'learner__username', 'learner__email')
+    readonly_fields = tuple(field.name for field in QuizAttempt._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(QuizAnswer)
+class QuizAnswerAdmin(ModelAdmin):
+    list_display = ('attempt', 'question', 'selected_choice', 'is_correct')
+    list_filter = ('is_correct',)
+    readonly_fields = tuple(field.name for field in QuizAnswer._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AssessmentSubmission)
+class AssessmentSubmissionAdmin(ModelAdmin):
+    list_display = ('assessment', 'learner', 'status', 'score', 'reward_granted', 'submitted_at', 'graded_at')
+    list_filter = ('status', 'reward_granted', 'submitted_at')
+    search_fields = ('assessment__title', 'learner__username', 'learner__email')
+    readonly_fields = ('assessment', 'learner', 'response_text', 'attachment', 'submitted_at', 'updated_at')
 
 
 @admin.register(CourseResource)

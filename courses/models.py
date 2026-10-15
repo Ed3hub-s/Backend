@@ -163,11 +163,68 @@ class Assessment(models.Model):
         default='graded',
     )
     duration_minutes = models.PositiveIntegerField(default=20)
+    pass_score = models.PositiveIntegerField(default=70, help_text='Minimum % to pass')
     due_date = models.DateField(null=True, blank=True)
     reward_tokens = models.PositiveIntegerField(default=15)
 
     def __str__(self):
         return self.title
+
+
+class QuizAttempt(models.Model):
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='attempts')
+    learner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='quiz_attempts')
+    attempt_number = models.PositiveIntegerField()
+    score = models.DecimalField(max_digits=5, decimal_places=2)
+    passed = models.BooleanField(default=False)
+    reward_granted = models.BooleanField(default=False)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('-submitted_at',)
+        constraints = [
+            models.UniqueConstraint(fields=('quiz', 'learner', 'attempt_number'), name='unique_quiz_attempt_number'),
+        ]
+
+    def __str__(self):
+        return f'{self.learner} — {self.quiz} — {self.score}%'
+
+
+class QuizAnswer(models.Model):
+    attempt = models.ForeignKey(QuizAttempt, on_delete=models.CASCADE, related_name='answers')
+    question = models.ForeignKey(Question, on_delete=models.PROTECT, related_name='submitted_answers')
+    selected_choice = models.ForeignKey(Choice, on_delete=models.PROTECT, related_name='submitted_answers')
+    is_correct = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=('attempt', 'question'), name='unique_attempt_question_answer'),
+        ]
+
+
+class AssessmentSubmission(models.Model):
+    STATUSES = (('submitted', 'Submitted'), ('graded', 'Graded'))
+
+    assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name='submissions')
+    learner = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assessment_submissions')
+    response_text = models.TextField(blank=True, default='')
+    attachment = models.FileField(upload_to='courses/assessment_submissions/', blank=True, null=True)
+    status = models.CharField(max_length=12, choices=STATUSES, default='submitted')
+    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    feedback = models.TextField(blank=True, default='')
+    reward_granted = models.BooleanField(default=False)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    graded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ('-submitted_at',)
+        constraints = [
+            models.UniqueConstraint(fields=('assessment', 'learner'), name='unique_assessment_learner_submission'),
+        ]
+
+    def __str__(self):
+        return f'{self.learner} — {self.assessment} ({self.status})'
 
 
 class CourseResource(models.Model):
