@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
@@ -94,6 +95,26 @@ class LearnerQuizAssessmentTests(TestCase):
         self.assertEqual(missing.status_code, 400)
         self.assertEqual(crossed.status_code, 400)
         self.assertFalse(QuizAttempt.objects.exists())
+
+    @patch('courses.views.award_tokens', side_effect=RuntimeError('token ledger unavailable'))
+    def test_quiz_submission_survives_reward_ledger_failure(self, award_tokens_mock):
+        self.client.force_authenticate(self.learner)
+        response = self.client.post(
+            f'/api/courses/quizzes/{self.quiz.pk}/attempt/',
+            {'answers': [
+                {'question_id': self.question_one.pk, 'choice_id': self.correct_one.pk},
+                {'question_id': self.question_two.pk, 'choice_id': self.correct_two.pk},
+            ]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['score'], '100.00')
+        self.assertTrue(response.data['passed'])
+        self.assertFalse(response.data['reward_granted'])
+        self.assertEqual(QuizAttempt.objects.count(), 1)
+        self.assertEqual(QuizAttempt.objects.get().answers.count(), 2)
+        award_tokens_mock.assert_called_once()
 
     def test_unenrolled_user_cannot_take_quiz_or_submit_assessment(self):
         self.client.force_authenticate(self.outsider)

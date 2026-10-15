@@ -1251,7 +1251,7 @@ class QuizAttemptView(APIView):
             score = (Decimal(correct) * Decimal('100') / Decimal(len(questions))).quantize(Decimal('0.01'))
             passed = score >= Decimal(quiz.pass_score)
             attempt_number = quiz.attempts.filter(learner=request.user).count() + 1
-            reward_granted = passed and not quiz.attempts.filter(
+            reward_eligible = passed and not quiz.attempts.filter(
                 learner=request.user, reward_granted=True,
             ).exists()
             attempt = QuizAttempt.objects.create(
@@ -1260,7 +1260,7 @@ class QuizAttemptView(APIView):
                 attempt_number=attempt_number,
                 score=score,
                 passed=passed,
-                reward_granted=reward_granted,
+                reward_granted=False,
             )
             QuizAnswer.objects.bulk_create([
                 QuizAnswer(
@@ -1271,13 +1271,31 @@ class QuizAttemptView(APIView):
                 )
                 for question, choice in resolved_answers
             ])
-            if reward_granted and quiz.reward_tokens:
-                award_tokens(
-                    request.user,
-                    quiz.reward_tokens,
-                    'quiz_pass',
-                    f'Passed quiz: {quiz.title}',
-                )
+            if reward_eligible:
+                if quiz.reward_tokens:
+                    try:
+                        # Keep reward bookkeeping in a savepoint. A wallet or
+                        # token-ledger failure must not discard a valid quiz
+                        # attempt and its answers.
+                        with db_transaction.atomic():
+                            award_tokens(
+                                request.user,
+                                quiz.reward_tokens,
+                                'quiz_pass',
+                                f'Passed quiz: {quiz.title}',
+                            )
+                    except Exception:
+                        logger.exception(
+                            'Quiz %s attempt %s was recorded, but its token reward could not be granted.',
+                            quiz.pk,
+                            attempt.pk,
+                        )
+                    else:
+                        attempt.reward_granted = True
+                        attempt.save(update_fields=('reward_granted',))
+                else:
+                    attempt.reward_granted = True
+                    attempt.save(update_fields=('reward_granted',))
         return Response(QuizAttemptSerializer(attempt).data, status=201)
 
 
