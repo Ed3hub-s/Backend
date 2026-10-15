@@ -142,5 +142,6 @@ jobs:
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$SOURCE_IMAGE"
             docker tag "$SOURCE_IMAGE" "$COMPOSE_IMAGE"
+            docker compose run --rm backend python manage.py migrate --noinput
             docker compose up -d --no-deps backend celery celery-beat
             docker image prune -f
