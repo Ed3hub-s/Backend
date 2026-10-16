@@ -309,6 +309,15 @@ CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', 'ht
 # Paystack
 PAYSTACK_SECRET_KEY = os.getenv('PAYSTACK_SECRET_KEY', '')
 
+# TikTok Events API. The access token is a server-only secret and must be set
+# in the deployment environment, never in frontend code or source control.
+TIKTOK_PIXEL_ID = os.getenv('TIKTOK_PIXEL_ID', 'DB92M43C77UAEK319H9G')
+TIKTOK_EVENTS_ACCESS_TOKEN = os.getenv('TIKTOK_EVENTS_ACCESS_TOKEN', '')
+TIKTOK_EVENTS_API_URL = os.getenv(
+    'TIKTOK_EVENTS_API_URL',
+    'https://business-api.tiktok.com/open_api/v1.3/event/track/',
+)
+
 # Cloudflare RealtimeKit. The web client is intentionally pinned to the v1 SDK
 # line; all management credentials remain on this Django server.
 CLOUDFLARE_ACCOUNT_ID = os.getenv('CLOUDFLARE_ACCOUNT_ID', '')

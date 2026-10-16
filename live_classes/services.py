@@ -4,6 +4,7 @@ from decimal import Decimal
 from urllib.parse import quote, urlsplit
 
 import requests
+from analytics.tiktok import page_url, queue_tiktok_event
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -394,6 +395,27 @@ def verify_live_class_payment(registration, reference):
         item.amount_paid = Decimal(share + (index < remainder)) / 100
         item.save(update_fields=('registration_status', 'access_status', 'access_granted_at', 'amount_paid'))
     credit_educator_live_class_revenue(payment)
+    first_registration = registrations[0]
+    live_class = first_registration.live_class
+    label = live_class.bundle.title if live_class.bundle_id else live_class.title
+    content_id = f'bundle-{live_class.bundle_id}' if live_class.bundle_id else f'live-class-{live_class.pk}'
+    queue_tiktok_event(
+        event='Purchase',
+        event_id=f'live-class-purchase-{payment.transaction_reference}',
+        user=payment.user,
+        url=page_url(f'/live-classes/{live_class.slug}'),
+        properties={
+            'currency': payment.currency,
+            'value': float(payment.amount),
+            'content_type': 'product',
+            'contents': [{
+                'content_id': content_id,
+                'content_name': label,
+                'price': float(payment.amount),
+                'quantity': 1,
+            }],
+        },
+    )
     registration.refresh_from_db()
     return registration
 

@@ -142,6 +142,11 @@ jobs:
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$SOURCE_IMAGE"
             docker tag "$SOURCE_IMAGE" "$COMPOSE_IMAGE"
-            docker compose run --rm backend python manage.py migrate --noinput
-            docker compose up -d --no-deps backend celery celery-beat
+            docker compose up -d --no-deps --force-recreate backend celery celery-beat
+            # Run against the exact long-lived backend container, using the
+            # same code, environment and database connection that serve API
+            # traffic. A transient compose run can diverge from production
+            # when the VPS compose file has service-specific overrides.
+            docker compose exec -T backend python manage.py migrate --noinput
+            docker compose exec -T backend python manage.py shell -c "from courses.models import QuizAttempt, QuizAnswer; QuizAttempt.objects.exists(); QuizAnswer.objects.exists(); print('Quiz attempt schema verified')"
             docker image prune -f
