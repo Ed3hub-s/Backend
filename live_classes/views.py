@@ -33,7 +33,6 @@ from .services import (
     verify_live_class_payment,
 )
 from notifications.utils import NotificationService
-from analytics.tiktok import page_url, queue_tiktok_event, request_match_data
 
 
 def live_class_queryset(request=None):
@@ -140,28 +139,6 @@ class RegisterLiveClassView(APIView):
     def post(self, request, slug):
         live_class = get_object_or_404(LiveClass, slug=slug)
         registration, checkout, created = register_for_live_class(live_class, request.user)
-        if checkout:
-            payment = registration.payment
-            label = live_class.bundle.title if live_class.bundle_id else live_class.title
-            content_id = f'bundle-{live_class.bundle_id}' if live_class.bundle_id else f'live-class-{live_class.pk}'
-            queue_tiktok_event(
-                event='InitiateCheckout',
-                event_id=f'live-class-checkout-{payment.transaction_reference}',
-                user=request.user,
-                url=page_url(f'/live-classes/{live_class.slug}'),
-                properties={
-                    'currency': payment.currency,
-                    'value': float(payment.amount),
-                    'content_type': 'product',
-                    'contents': [{
-                        'content_id': content_id,
-                        'content_name': label,
-                        'price': float(payment.amount),
-                        'quantity': 1,
-                    }],
-                },
-                match_data=request_match_data(request),
-            )
         if created:
             NotificationService.create_notification(
                 recipient=live_class.educator,

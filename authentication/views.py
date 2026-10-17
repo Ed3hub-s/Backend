@@ -13,7 +13,6 @@ from rest_framework_simplejwt.exceptions import TokenError
 
 from analytics.models import AnalyticsEvent
 from analytics.services import track_event, track_return_visit_7d
-from analytics.tiktok import page_url, queue_tiktok_event, request_match_data
 from .models import AffiliateMarketer, AffiliateReferral, MarketerWallet, OTPCode, UserProfile
 from .serializers import RegisterSerializer, UserSerializer, EducatorSerializer, GoogleAuthSerializer, ForgotPasswordSerializer, VerifyResetOTPSerializer, ResetPasswordSerializer
 from .utils import (
@@ -114,14 +113,6 @@ class VerifyOTPView(APIView):
         credit_verified_referral_signup(user)
         send_welcome_email(user, profile.role)
         track_event(request, AnalyticsEvent.SIGNUP_COMPLETED, user=user, metadata={'role': profile.role})
-        queue_tiktok_event(
-            event='CompleteRegistration',
-            event_id=f'registration-{user.pk}',
-            user=user,
-            url=page_url('/sign-in'),
-            properties={'content_type': 'product', 'content_name': profile.role},
-            match_data=request_match_data(request),
-        )
         if profile.role == 'educator':
             track_event(request, AnalyticsEvent.CREATOR_SIGNUP_COMPLETED, user=user)
 
@@ -276,14 +267,6 @@ class GoogleAuthView(APIView):
             send_welcome_email(user, role)
             is_new_user = True
             track_event(request, AnalyticsEvent.SIGNUP_COMPLETED, user=user, metadata={'role': role, 'provider': 'google'})
-            queue_tiktok_event(
-                event='CompleteRegistration',
-                event_id=f'registration-{user.pk}',
-                user=user,
-                url=page_url('/dashboard'),
-                properties={'content_type': 'product', 'content_name': role},
-                match_data=request_match_data(request),
-            )
             if role == 'educator':
                 track_event(request, AnalyticsEvent.CREATOR_SIGNUP_COMPLETED, user=user, metadata={'provider': 'google'})
         else:

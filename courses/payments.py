@@ -7,7 +7,6 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from authentication.utils import credit_first_purchase_commission
-from analytics.tiktok import page_url, queue_tiktok_event
 from core.payments import initialize_payment, verify_payment
 from .models import Course, CoursePayment, Enrollment, EducatorWallet, EducatorTransaction, EDUCATOR_SHARE
 
@@ -90,23 +89,6 @@ def fulfill_course_payment(payment):
         description=f'Verified course payment {payment.reference}',
     )
     credit_first_purchase_commission(payment.learner, payment.course, paid_amount=payment.amount)
-    queue_tiktok_event(
-        event='Purchase',
-        event_id=f'course-purchase-{payment.reference}',
-        user=payment.learner,
-        url=page_url(f'/courses/{payment.course.slug}'),
-        properties={
-            'currency': payment.currency,
-            'value': float(payment.amount),
-            'content_type': 'product',
-            'contents': [{
-                'content_id': str(payment.course_id),
-                'content_name': payment.course.title,
-                'price': float(payment.amount),
-                'quantity': 1,
-            }],
-        },
-    )
     return enrollment
 
 

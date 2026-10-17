@@ -781,25 +781,6 @@ class EnrollView(APIView):
 
         enrollment, checkout, created = purchase_course(course, request.user, request.data.get('reference'))
         if checkout:
-            from analytics.tiktok import page_url, queue_tiktok_event, request_match_data
-            queue_tiktok_event(
-                event='InitiateCheckout',
-                event_id=f"course-checkout-{checkout['reference']}",
-                user=request.user,
-                url=page_url(f'/courses/{course.slug}'),
-                properties={
-                    'currency': 'NGN',
-                    'value': float(course.price),
-                    'content_type': 'product',
-                    'contents': [{
-                        'content_id': str(course.pk),
-                        'content_name': course.title,
-                        'price': float(course.price),
-                        'quantity': 1,
-                    }],
-                },
-                match_data=request_match_data(request),
-            )
             return Response({'checkout': checkout}, status=status.HTTP_202_ACCEPTED)
         if not created:
             return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_200_OK)
